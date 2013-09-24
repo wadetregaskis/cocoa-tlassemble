@@ -298,15 +298,20 @@ int main(int argc, const char *argv[]) {
             }
         }
     }
-    [movie updateMovieFile];
-    
+
+    const BOOL successful = [movie updateMovieFile];
+    if (!successful) {
+        fprintf(stderr, "Unable to complete creation of movie.\n");
+    } else {
+        if (!quiet) {
+            printf("Successfully created %s\n",[[destPath stringByAbbreviatingWithTildeInPath] UTF8String]);
+        }
+    }
+
     [movie release];
-    
-    if (!quiet) {
-        printf("Successfully created %s\n",[[destPath stringByAbbreviatingWithTildeInPath] UTF8String]);
-    } 
+
     // Clean up
     [pool drain];
-    return 0;
+    return (successful ? 0 : -1);
 }
 
