@@ -77,7 +77,6 @@ int main(int argc, const char *argv[]) {
     // width (resize proportionally)
 
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-    int n;
 
     double height;
     double fps;
