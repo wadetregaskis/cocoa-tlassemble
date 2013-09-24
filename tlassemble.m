@@ -96,16 +96,14 @@ int main(int argc, const char *argv[]) {
     const BOOL quiet = [args boolForKey:@"quiet"];
     const BOOL reverseArray = [args boolForKey:@"reverse"];
 
-    NSDictionary *codec = [NSDictionary dictionaryWithObjectsAndKeys:
-                           @"avc1", @"h264",
-                           @"mpv4", @"mpv4",
-                           @"jpeg", @"photojpeg",
-                           @"raw ", @"raw", nil];
+    NSDictionary *codec = @{ @"h264": @"avc1",
+                             @"mpv4": @"mpv4",
+                             @"photojpeg" : @"jpeg",
+                             @"raw": @"raw " };
 
-    NSDictionary *quality = [NSDictionary dictionaryWithObjectsAndKeys:
-                             [NSNumber numberWithLong:codecLowQuality], @"low",
-                             [NSNumber numberWithLong:codecNormalQuality], @"normal",
-                             [NSNumber numberWithLong:codecMaxQuality], @"high", nil];
+    NSDictionary *quality = @{ @"low": @(codecLowQuality),
+                               @"normal": @(codecNormalQuality),
+                               @"high": @(codecMaxQuality) };
 
     if (fps == 0.0) {
         fps = 30.0;
@@ -176,11 +174,9 @@ int main(int argc, const char *argv[]) {
         return 1;
 	}
 
-    NSDictionary *imageAttributes = [NSDictionary dictionaryWithObjectsAndKeys:
-                                     [codec objectForKey:codecSpec], QTAddImageCodecType,
-                                     [quality objectForKey:qualitySpec], QTAddImageCodecQuality,
-                                     [NSNumber numberWithLong:100000], QTTrackTimeScaleAttribute,
-                                     nil];
+    NSDictionary *imageAttributes = @{ QTAddImageCodecType: [codec objectForKey:codecSpec],
+                                       QTAddImageCodecQuality: [quality objectForKey:qualitySpec],
+                                       QTTrackTimeScaleAttribute: @100000 };
 
     DLOG(@"%@",imageAttributes);
 
@@ -222,7 +218,7 @@ int main(int argc, const char *argv[]) {
                 "Try 'tlassemble --help' for more information.\n");
         return 1;
     }
-    [movie setAttribute:[NSNumber numberWithBool:YES] forKey:QTMovieEditableAttribute];
+    [movie setAttribute:@YES forKey:QTMovieEditableAttribute];
 
     const long timeScale = 100000;
     const long long timeValue = (long long) ceil((double) timeScale / fps);
