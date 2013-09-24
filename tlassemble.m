@@ -136,7 +136,7 @@ int main(int argc, const char *argv[]) {
         DLOG(@"codec: %@",codecSpec);
         DLOG(@"fps: %f",fps);
         DLOG(@"height: %f",height);
-        DLOG(@"quiet: %i", quiet);
+        DLOG(@"quiet: %@", quiet);
 
         NSFileManager *fileManager = [NSFileManager defaultManager];
         NSString *inputPath = [[NSURL fileURLWithPath:[[NSString stringWithUTF8String:argv[1]]
@@ -181,8 +181,18 @@ int main(int argc, const char *argv[]) {
 
         NSError *err = nil;
         NSArray *imageFiles = [fileManager contentsOfDirectoryAtPath:inputPath error:&err];
+
+        if (!imageFiles) {
+            fprintf(stderr, "Unable to enumerate files in \"%s\": %s\n", inputPath.UTF8String, (err ? err.localizedDescription.UTF8String : "unknown error"));
+            return -1;
+        }
+
+        if (0 == imageFiles.count) {
+            fprintf(stderr, "No files found in \"%s\".\n", inputPath.UTF8String);
+            return -1;
+        }
+        
         imageFiles = [imageFiles sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
-        int imageCount = 0;
 
         if (reverseArray) {
             NSMutableArray *reversedArray = [NSMutableArray arrayWithCapacity:[imageFiles count]];
@@ -191,25 +201,6 @@ int main(int argc, const char *argv[]) {
             }
             imageFiles = reversedArray;
         }
-
-        for (NSString *file in imageFiles) {
-            if ([[file pathExtension] caseInsensitiveCompare:@"jpeg"] == NSOrderedSame ||
-                [[file pathExtension] caseInsensitiveCompare:@"png"] == NSOrderedSame ||
-                [[file pathExtension] caseInsensitiveCompare:@"nef"] == NSOrderedSame ||
-                [[file pathExtension] caseInsensitiveCompare:@"jpg"] == NSOrderedSame) {
-                imageCount++;
-            }
-        }
-
-        if (imageCount == 0) {
-            fprintf(stderr, "Error: Directory '%s' %s",
-                    [[inputPath stringByAbbreviatingWithTildeInPath] UTF8String],
-                    "does not contain any jpeg images.\n"
-                    "Try 'tlassemble --help' for more information.\n");
-            return 1;
-
-        }
-
 
         QTMovie *movie = [[QTMovie alloc] initToWritableFile:destPath error:NULL];
         if (movie == nil) {
@@ -223,74 +214,81 @@ int main(int argc, const char *argv[]) {
         const long long timeValue = (long long) ceil((double) timeScale / fps);
         const QTTime duration = QTMakeTime(timeValue, timeScale);
         double width = 0;
-        int counter = 0;
+        unsigned long fileIndex = 1;  // Human-readable, so 1-based.
+        unsigned long framesAddedSuccessfully = 0;
 
         for (NSString *file in imageFiles) {
-            NSString *fullFilename = [inputPath stringByAppendingPathComponent:file];
-            if ([[fullFilename pathExtension] caseInsensitiveCompare:@"jpeg"] == NSOrderedSame ||
-                [[fullFilename pathExtension] caseInsensitiveCompare:@"png"] == NSOrderedSame ||
-                [[fullFilename pathExtension] caseInsensitiveCompare:@"nef"] == NSOrderedSame ||
-                [[fullFilename pathExtension] caseInsensitiveCompare:@"jpg"] == NSOrderedSame) {
-                @autoreleasepool {
-                    NSImage *image = [[NSImage alloc] initWithContentsOfFile:fullFilename];
+            @autoreleasepool {
+                NSImage *image = [[NSImage alloc] initWithContentsOfFile:[inputPath stringByAppendingPathComponent:file]];
 
-                    if (image) {
-                        const double width = (height
-                                              ? height * (image.size.width / image.size.height)
-                                              : image.size.width);
+                if (image) {
+                    const double width = (height
+                                          ? height * (image.size.width / image.size.height)
+                                          : image.size.width);
 
-                        if (!height) {
-                            height = image.size.height;
+                    if (!height) {
+                        height = image.size.height;
+                    }
+
+                    const double kSafeHeightLimit = 2512;
+                    if (height > kSafeHeightLimit) {
+                        static BOOL warnedOnce = NO;
+
+                        if (!warnedOnce) {
+                            fprintf(stderr, "Warning: movies with heights greater than %lf pixels are known to not work sometimes (the resulting movie file will be essentially empty).\n", kSafeHeightLimit);
+                            warnedOnce = YES;
                         }
+                    }
 
-                        const double kSafeHeightLimit = 2512;
-                        if (height > kSafeHeightLimit) {
-                            static BOOL warnedOnce = NO;
+                    // Always "render" the image, even if not actually resizing, as this ensures formats like NEF actually work (otherwise the output movie gets weird, with one empty, broken track per source image).
+                    NSImage *renderedImage = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
 
-                            if (!warnedOnce) {
-                                fprintf(stderr, "Warning: movies with heights greater than %lf pixels are known to not work sometimes (the resulting movie file will be essentially empty).\n", kSafeHeightLimit);
-                                warnedOnce = YES;
-                            }
-                        }
+                    if (renderedImage) {
+                        [renderedImage lockFocus];
+                        [image drawInRect:NSMakeRect(0.f, 0.f, width, height)
+                                 fromRect:NSZeroRect
+                                operation:NSCompositeSourceOver fraction:1.f];
+                        [renderedImage unlockFocus];
 
-                        // Always "render" the image, even if not actually resizing, as this ensures formats like NEF actually work (otherwise the output movie gets weird, with one empty, broken track per source image).
-                        NSImage *renderedImage = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
+                        [movie addImage:renderedImage
+                            forDuration:duration
+                         withAttributes:imageAttributes];
 
-                        if (renderedImage) {
-                            [renderedImage lockFocus];
-                            [image drawInRect:NSMakeRect(0.f, 0.f, width, height)
-                                     fromRect:NSZeroRect
-                                    operation:NSCompositeSourceOver fraction:1.f];
-                            [renderedImage unlockFocus];
+                        ++framesAddedSuccessfully;
 
-                            [movie addImage:renderedImage
-                                forDuration:duration
-                             withAttributes:imageAttributes];
-                        } else {
-                            fprintf(stderr, "Unable to create render buffer for frame \"%s\" with size %lf x %lf (%i of %i)\n", [file UTF8String], width, height, counter, imageCount);
+                        if (!quiet) {
+                            printf("Processed %s (%lu of %lu)\n", [file UTF8String], fileIndex, imageFiles.count);
                         }
                     } else {
-                        fprintf(stderr, "Unable to read \"%s\" (%i of %i)\n", [file UTF8String], counter, imageCount);
+                        fprintf(stderr, "Unable to create render buffer for frame \"%s\" with size %lf x %lf (%lu of %lu)\n", file.UTF8String, width, height, fileIndex, imageFiles.count);
+                    }
+                } else {
+                    fprintf(stderr, "Unable to read \"%s\" (%lu of %lu)\n", file.UTF8String, fileIndex, imageFiles.count);
+                }
+            }
+
+            ++fileIndex;
+        }
+
+        if (0 < framesAddedSuccessfully) {
+            if (![movie updateMovieFile]) {
+                fprintf(stderr, "Unable to complete creation of movie.\n");
+                return -1;
+            } else {
+                if (framesAddedSuccessfully != imageFiles.count) {
+                    fprintf(stderr, "Warning: source folder contained %lu files but only %lu were readable as images.\n", imageFiles.count, framesAddedSuccessfully);
+                } else {
+                    if (!quiet) {
+                        printf("Successfully created %s\n", [destPath stringByAbbreviatingWithTildeInPath].UTF8String);
                     }
                 }
 
-                counter++;
-                if (!quiet) {
-                    printf("Processed %s (%i of %i)\n", [file UTF8String], counter, imageCount);
-                }
+                return 0;
             }
-        }
-
-        const BOOL successful = [movie updateMovieFile];
-        if (!successful) {
-            fprintf(stderr, "Unable to complete creation of movie.\n");
         } else {
-            if (!quiet) {
-                printf("Successfully created %s\n",[[destPath stringByAbbreviatingWithTildeInPath] UTF8String]);
-            }
+            fprintf(stderr, "None of the %lu files in \"%s\" were readable as images.\n", imageFiles.count, inputPath.UTF8String);
+            return -1;
         }
-
-        return (successful ? 0 : -1);
     }
 }
 
