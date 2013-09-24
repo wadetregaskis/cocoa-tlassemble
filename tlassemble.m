@@ -73,232 +73,224 @@ int main(int argc, const char *argv[]) {
     // quality (high, normal, low)
     // width (resize proportionally)
 
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-
-    // Parse command line options
-    NSUserDefaults *args = [NSUserDefaults standardUserDefaults];
-    if (argc == 2) {
-        if (strcmp(argv[1], "--help") == 0 ||
-            strcmp(argv[1], "-help") == 0) {
-            help();
+    @autoreleasepool {
+        // Parse command line options
+        NSUserDefaults *args = [NSUserDefaults standardUserDefaults];
+        if (argc == 2) {
+            if (strcmp(argv[1], "--help") == 0 ||
+                strcmp(argv[1], "-help") == 0) {
+                help();
+                return 1;
+            }
+        }
+        if (argc < 3) {
+            usage();
             return 1;
         }
-    }
-    if (argc < 3) {
-        usage();
-        return 1;
-    }
 
-    double height = [args doubleForKey:@"height"];
-    double fps = [args doubleForKey:@"fps"];
-    NSString *codecSpec = [args stringForKey:@"codec"];
-    NSString *qualitySpec = [args stringForKey:@"quality"];
-    const BOOL quiet = [args boolForKey:@"quiet"];
-    const BOOL reverseArray = [args boolForKey:@"reverse"];
+        double height = [args doubleForKey:@"height"];
+        double fps = [args doubleForKey:@"fps"];
+        NSString *codecSpec = [args stringForKey:@"codec"];
+        NSString *qualitySpec = [args stringForKey:@"quality"];
+        const BOOL quiet = [args boolForKey:@"quiet"];
+        const BOOL reverseArray = [args boolForKey:@"reverse"];
 
-    NSDictionary *codec = @{ @"h264": @"avc1",
-                             @"mpv4": @"mpv4",
-                             @"photojpeg" : @"jpeg",
-                             @"raw": @"raw " };
+        NSDictionary *codec = @{ @"h264": @"avc1",
+                                 @"mpv4": @"mpv4",
+                                 @"photojpeg" : @"jpeg",
+                                 @"raw": @"raw " };
 
-    NSDictionary *quality = @{ @"low": @(codecLowQuality),
-                               @"normal": @(codecNormalQuality),
-                               @"high": @(codecMaxQuality) };
+        NSDictionary *quality = @{ @"low": @(codecLowQuality),
+                                   @"normal": @(codecNormalQuality),
+                                   @"high": @(codecMaxQuality) };
 
-    if (fps == 0.0) {
-        fps = 30.0;
-    }
-
-    if (fps < 0.1 || fps > 60) {
-        fprintf(stderr, "%s","Error: Framerate must be between 0.1 and 60 fps.\n"
-                "Try 'tlassemble --help' for more information.\n");
-        return 1;
-    }
-
-    if (codecSpec == nil) {
-        codecSpec = @"h264";
-    }
-
-    if (![[codec allKeys] containsObject:codecSpec]) {
-        usage();
-        return 1;
-    }
-
-    if (qualitySpec == nil) {
-        qualitySpec = @"high";
-    }
-
-    if ([[quality allKeys] containsObject:qualitySpec] == NO) {
-        usage();
-        return 1;
-    }
-
-    DLOG(@"quality: %@",qualitySpec);
-    DLOG(@"codec: %@",codecSpec);
-    DLOG(@"fps: %f",fps);
-    DLOG(@"height: %f",height);
-    DLOG(@"quiet: %i", quiet);
-
-    NSFileManager *fileManager = [NSFileManager defaultManager];
-    NSString *inputPath = [[NSURL fileURLWithPath:[[NSString stringWithUTF8String:argv[1]]
-                                                   stringByExpandingTildeInPath]] path];
-    NSString *destPath = [[NSURL fileURLWithPath:[[NSString stringWithUTF8String:argv[2]]
-                                                  stringByExpandingTildeInPath]] path];
-
-    if (![destPath hasSuffix:@".mov"]) {
-        fprintf(stderr, "Error: Output filename must be of type '.mov'\n");
-        return 1;
-    }
-
-    if ([fileManager fileExistsAtPath:destPath]) {
-        fprintf(stderr, "Error: Output file already exists.\n");
-        return 1;
-    }
-
-    BOOL isDir;
-    if (!([fileManager fileExistsAtPath:[destPath stringByDeletingLastPathComponent]
-                            isDirectory:&isDir] && isDir)) {
-        fprintf(stderr,
-                "Error: Output file is not writable. "
-                "Does the destination directory exist?\n");
-        return 1;
-    }
-
-    DLOG(@"Input Path: %@", inputPath);
-    DLOG(@"Destination Path: %@", destPath);
-
-    if ((([fileManager fileExistsAtPath:inputPath isDirectory:&isDir] && isDir) &&
-         [fileManager isWritableFileAtPath:inputPath]) == NO) {
-        fprintf(stderr, "%s","Error: Input directory does not exist.\n"
-                "Try 'tlassemble --help' for more information.\n");
-        return 1;
-	}
-
-    NSDictionary *imageAttributes = @{ QTAddImageCodecType: [codec objectForKey:codecSpec],
-                                       QTAddImageCodecQuality: [quality objectForKey:qualitySpec],
-                                       QTTrackTimeScaleAttribute: @100000 };
-
-    DLOG(@"%@",imageAttributes);
-
-    NSError *err = nil;
-    NSArray *imageFiles = [fileManager contentsOfDirectoryAtPath:inputPath error:&err];
-    imageFiles = [imageFiles sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
-    int imageCount = 0;
-
-    if (reverseArray) {
-        NSMutableArray *reversedArray = [NSMutableArray arrayWithCapacity:[imageFiles count]];
-        for (NSString *element in [imageFiles reverseObjectEnumerator]) {
-            [reversedArray addObject:element];
+        if (fps == 0.0) {
+            fps = 30.0;
         }
-        imageFiles = reversedArray;
-    }
 
-    for (NSString *file in imageFiles) {
-        if ([[file pathExtension] caseInsensitiveCompare:@"jpeg"] == NSOrderedSame ||
-            [[file pathExtension] caseInsensitiveCompare:@"png"] == NSOrderedSame ||
-            [[file pathExtension] caseInsensitiveCompare:@"nef"] == NSOrderedSame ||
-            [[file pathExtension] caseInsensitiveCompare:@"jpg"] == NSOrderedSame) {
-            imageCount++;
+        if (fps < 0.1 || fps > 60) {
+            fprintf(stderr, "%s","Error: Framerate must be between 0.1 and 60 fps.\n"
+                    "Try 'tlassemble --help' for more information.\n");
+            return 1;
         }
-    }
 
-    if (imageCount == 0) {
-        fprintf(stderr, "Error: Directory '%s' %s",
-                [[inputPath stringByAbbreviatingWithTildeInPath] UTF8String],
-                "does not contain any jpeg images.\n"
-                "Try 'tlassemble --help' for more information.\n");
-        return 1;
+        if (codecSpec == nil) {
+            codecSpec = @"h264";
+        }
 
-    }
+        if (![[codec allKeys] containsObject:codecSpec]) {
+            usage();
+            return 1;
+        }
+
+        if (qualitySpec == nil) {
+            qualitySpec = @"high";
+        }
+
+        if ([[quality allKeys] containsObject:qualitySpec] == NO) {
+            usage();
+            return 1;
+        }
+
+        DLOG(@"quality: %@",qualitySpec);
+        DLOG(@"codec: %@",codecSpec);
+        DLOG(@"fps: %f",fps);
+        DLOG(@"height: %f",height);
+        DLOG(@"quiet: %i", quiet);
+
+        NSFileManager *fileManager = [NSFileManager defaultManager];
+        NSString *inputPath = [[NSURL fileURLWithPath:[[NSString stringWithUTF8String:argv[1]]
+                                                       stringByExpandingTildeInPath]] path];
+        NSString *destPath = [[NSURL fileURLWithPath:[[NSString stringWithUTF8String:argv[2]]
+                                                      stringByExpandingTildeInPath]] path];
+
+        if (![destPath hasSuffix:@".mov"]) {
+            fprintf(stderr, "Error: Output filename must be of type '.mov'\n");
+            return 1;
+        }
+
+        if ([fileManager fileExistsAtPath:destPath]) {
+            fprintf(stderr, "Error: Output file already exists.\n");
+            return 1;
+        }
+
+        BOOL isDir;
+        if (!([fileManager fileExistsAtPath:[destPath stringByDeletingLastPathComponent]
+                                isDirectory:&isDir] && isDir)) {
+            fprintf(stderr,
+                    "Error: Output file is not writable. "
+                    "Does the destination directory exist?\n");
+            return 1;
+        }
+
+        DLOG(@"Input Path: %@", inputPath);
+        DLOG(@"Destination Path: %@", destPath);
+
+        if ((([fileManager fileExistsAtPath:inputPath isDirectory:&isDir] && isDir) &&
+             [fileManager isWritableFileAtPath:inputPath]) == NO) {
+            fprintf(stderr, "%s","Error: Input directory does not exist.\n"
+                    "Try 'tlassemble --help' for more information.\n");
+            return 1;
+        }
+
+        NSDictionary *imageAttributes = @{ QTAddImageCodecType: [codec objectForKey:codecSpec],
+                                           QTAddImageCodecQuality: [quality objectForKey:qualitySpec],
+                                           QTTrackTimeScaleAttribute: @100000 };
+
+        DLOG(@"%@",imageAttributes);
+
+        NSError *err = nil;
+        NSArray *imageFiles = [fileManager contentsOfDirectoryAtPath:inputPath error:&err];
+        imageFiles = [imageFiles sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
+        int imageCount = 0;
+
+        if (reverseArray) {
+            NSMutableArray *reversedArray = [NSMutableArray arrayWithCapacity:[imageFiles count]];
+            for (NSString *element in [imageFiles reverseObjectEnumerator]) {
+                [reversedArray addObject:element];
+            }
+            imageFiles = reversedArray;
+        }
+
+        for (NSString *file in imageFiles) {
+            if ([[file pathExtension] caseInsensitiveCompare:@"jpeg"] == NSOrderedSame ||
+                [[file pathExtension] caseInsensitiveCompare:@"png"] == NSOrderedSame ||
+                [[file pathExtension] caseInsensitiveCompare:@"nef"] == NSOrderedSame ||
+                [[file pathExtension] caseInsensitiveCompare:@"jpg"] == NSOrderedSame) {
+                imageCount++;
+            }
+        }
+
+        if (imageCount == 0) {
+            fprintf(stderr, "Error: Directory '%s' %s",
+                    [[inputPath stringByAbbreviatingWithTildeInPath] UTF8String],
+                    "does not contain any jpeg images.\n"
+                    "Try 'tlassemble --help' for more information.\n");
+            return 1;
+
+        }
 
 
-    QTMovie *movie = [[QTMovie alloc] initToWritableFile:destPath error:NULL];
-    if (movie == nil) {
-        fprintf(stderr, "%s","Error: Unable to initialize QT object.\n"
-                "Try 'tlassemble --help' for more information.\n");
-        return 1;
-    }
-    [movie setAttribute:@YES forKey:QTMovieEditableAttribute];
+        QTMovie *movie = [[QTMovie alloc] initToWritableFile:destPath error:NULL];
+        if (movie == nil) {
+            fprintf(stderr, "%s","Error: Unable to initialize QT object.\n"
+                    "Try 'tlassemble --help' for more information.\n");
+            return 1;
+        }
+        [movie setAttribute:@YES forKey:QTMovieEditableAttribute];
 
-    const long timeScale = 100000;
-    const long long timeValue = (long long) ceil((double) timeScale / fps);
-    const QTTime duration = QTMakeTime(timeValue, timeScale);
-    double width = 0;
-    int counter = 0;
+        const long timeScale = 100000;
+        const long long timeValue = (long long) ceil((double) timeScale / fps);
+        const QTTime duration = QTMakeTime(timeValue, timeScale);
+        double width = 0;
+        int counter = 0;
 
-    for (NSString *file in imageFiles) {
-        NSString *fullFilename = [inputPath stringByAppendingPathComponent:file];
-        if ([[fullFilename pathExtension] caseInsensitiveCompare:@"jpeg"] == NSOrderedSame ||
-            [[fullFilename pathExtension] caseInsensitiveCompare:@"png"] == NSOrderedSame ||
-            [[fullFilename pathExtension] caseInsensitiveCompare:@"nef"] == NSOrderedSame ||
-            [[fullFilename pathExtension] caseInsensitiveCompare:@"jpg"] == NSOrderedSame) {
-            NSAutoreleasePool *innerPool = [[NSAutoreleasePool alloc] init];
-            NSImage *image = [[NSImage alloc] initWithContentsOfFile:fullFilename];
+        for (NSString *file in imageFiles) {
+            NSString *fullFilename = [inputPath stringByAppendingPathComponent:file];
+            if ([[fullFilename pathExtension] caseInsensitiveCompare:@"jpeg"] == NSOrderedSame ||
+                [[fullFilename pathExtension] caseInsensitiveCompare:@"png"] == NSOrderedSame ||
+                [[fullFilename pathExtension] caseInsensitiveCompare:@"nef"] == NSOrderedSame ||
+                [[fullFilename pathExtension] caseInsensitiveCompare:@"jpg"] == NSOrderedSame) {
+                @autoreleasepool {
+                    NSImage *image = [[NSImage alloc] initWithContentsOfFile:fullFilename];
 
-            if (image) {
-                const double width = (height
-                                      ? height * (image.size.width / image.size.height)
-                                      : image.size.width);
+                    if (image) {
+                        const double width = (height
+                                              ? height * (image.size.width / image.size.height)
+                                              : image.size.width);
 
-                if (!height) {
-                    height = image.size.height;
-                }
+                        if (!height) {
+                            height = image.size.height;
+                        }
 
-                const double kSafeHeightLimit = 2512;
-                if (height > kSafeHeightLimit) {
-                    static BOOL warnedOnce = NO;
+                        const double kSafeHeightLimit = 2512;
+                        if (height > kSafeHeightLimit) {
+                            static BOOL warnedOnce = NO;
 
-                    if (!warnedOnce) {
-                        fprintf(stderr, "Warning: movies with heights greater than %lf pixels are known to not work sometimes (the resulting movie file will be essentially empty).\n", kSafeHeightLimit);
-                        warnedOnce = YES;
+                            if (!warnedOnce) {
+                                fprintf(stderr, "Warning: movies with heights greater than %lf pixels are known to not work sometimes (the resulting movie file will be essentially empty).\n", kSafeHeightLimit);
+                                warnedOnce = YES;
+                            }
+                        }
+
+                        // Always "render" the image, even if not actually resizing, as this ensures formats like NEF actually work (otherwise the output movie gets weird, with one empty, broken track per source image).
+                        NSImage *renderedImage = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
+
+                        if (renderedImage) {
+                            [renderedImage lockFocus];
+                            [image drawInRect:NSMakeRect(0.f, 0.f, width, height)
+                                     fromRect:NSZeroRect
+                                    operation:NSCompositeSourceOver fraction:1.f];
+                            [renderedImage unlockFocus];
+
+                            [movie addImage:renderedImage
+                                forDuration:duration
+                             withAttributes:imageAttributes];
+                        } else {
+                            fprintf(stderr, "Unable to create render buffer for frame \"%s\" with size %lf x %lf (%i of %i)\n", [file UTF8String], width, height, counter, imageCount);
+                        }
+                    } else {
+                        fprintf(stderr, "Unable to read \"%s\" (%i of %i)\n", [file UTF8String], counter, imageCount);
                     }
                 }
 
-                // Always "render" the image, even if not actually resizing, as this ensures formats like NEF actually work (otherwise the output movie gets weird, with one empty, broken track per source image).
-                NSImage *renderedImage = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
-
-                if (renderedImage) {
-                    [renderedImage lockFocus];
-                    [image drawInRect:NSMakeRect(0.f, 0.f, width, height)
-                             fromRect:NSZeroRect
-                            operation:NSCompositeSourceOver fraction:1.f];
-                    [renderedImage unlockFocus];
-
-                    [movie addImage:renderedImage
-                        forDuration:duration
-                     withAttributes:imageAttributes];
-
-                    [renderedImage release];
-                } else {
-                    fprintf(stderr, "Unable to create render buffer for frame \"%s\" with size %lf x %lf (%i of %i)\n", [file UTF8String], width, height, counter, imageCount);
+                counter++;
+                if (!quiet) {
+                    printf("Processed %s (%i of %i)\n", [file UTF8String], counter, imageCount);
                 }
-
-                [image release];
-            } else {
-                fprintf(stderr, "Unable to read \"%s\" (%i of %i)\n", [file UTF8String], counter, imageCount);
             }
+        }
 
-            [innerPool release];
-            counter++;
+        const BOOL successful = [movie updateMovieFile];
+        if (!successful) {
+            fprintf(stderr, "Unable to complete creation of movie.\n");
+        } else {
             if (!quiet) {
-                printf("Processed %s (%i of %i)\n", [file UTF8String], counter, imageCount);
+                printf("Successfully created %s\n",[[destPath stringByAbbreviatingWithTildeInPath] UTF8String]);
             }
         }
+
+        return (successful ? 0 : -1);
     }
-
-    const BOOL successful = [movie updateMovieFile];
-    if (!successful) {
-        fprintf(stderr, "Unable to complete creation of movie.\n");
-    } else {
-        if (!quiet) {
-            printf("Successfully created %s\n",[[destPath stringByAbbreviatingWithTildeInPath] UTF8String]);
-        }
-    }
-
-    [movie release];
-
-    // Clean up
-    [pool drain];
-    return (successful ? 0 : -1);
 }
 
