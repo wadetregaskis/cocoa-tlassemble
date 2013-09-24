@@ -267,12 +267,12 @@ int main(int argc, const char *argv[]) {
                         height = image.size.height;
                     }
 
-                    const double kSafeHeightLimit = 2512;
+                    const unsigned long kSafeHeightLimit = 2512;
                     if (height > kSafeHeightLimit) {
                         static BOOL warnedOnce = NO;
 
                         if (!warnedOnce) {
-                            fprintf(stderr, "Warning: movies with heights greater than %lf pixels are known to not work sometimes (the resulting movie file will be essentially empty).\n", kSafeHeightLimit);
+                            fprintf(stderr, "Warning: movies with heights greater than %lu pixels are known to not work sometimes (the resulting movie file will be essentially empty).\n", kSafeHeightLimit);
                             warnedOnce = YES;
                         }
                     }
