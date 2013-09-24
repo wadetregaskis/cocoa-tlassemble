@@ -153,7 +153,7 @@ int main(int argc, char* const argv[]) {
                            "EXAMPLES\n"
                            "\t%s ./images time_lapse.mov\n"
                            "\t%s --fps 30 --height 720 --codec h264 --quality high imagesA imagesB time_lapse.mov\n"
-                           "\t%s  --quiet image01.jpg image02.jpg image03.jpg time_lapse.mov\n"
+                           "\t%s --quiet image01.jpg image02.jpg image03.jpg time_lapse.mov\n"
                            "\n"
                            "WARRANTY\n"
                            "There isn't one.  This software is provided in the hope that it will be useful, but without any warranty, without even the implied warranty for merchantability or fitness for a particular purpose.  The software is provided as-is and its authors are not to be held responsible for any harm that may result from its use, including (but not limited to) data loss or corruption.\n",
