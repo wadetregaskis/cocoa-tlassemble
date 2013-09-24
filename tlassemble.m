@@ -78,19 +78,6 @@ int main(int argc, const char *argv[]) {
 
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 
-    double height;
-    double fps;
-    NSString *codecSpec;
-    NSString *qualitySpec;
-    NSString *destPath;
-    NSString *inputPath;
-	NSArray *imageFiles;
-	NSError *err;
-	err = nil;
-	BOOL isDir;
-    BOOL quiet;
-    BOOL reverseArray;
-
     // Parse command line options
     NSUserDefaults *args = [NSUserDefaults standardUserDefaults];
     if (argc == 2) {
@@ -105,12 +92,12 @@ int main(int argc, const char *argv[]) {
         return 1;
     }
 
-    height = [args doubleForKey:@"height"];
-    fps = [args doubleForKey:@"fps"];
-    codecSpec = [args stringForKey:@"codec"];
-    qualitySpec = [args stringForKey:@"quality"];
-    quiet = [args boolForKey:@"quiet"];
-    reverseArray = [args boolForKey:@"reverse"];
+    double height = [args doubleForKey:@"height"];
+    double fps = [args doubleForKey:@"fps"];
+    NSString *codecSpec = [args stringForKey:@"codec"];
+    NSString *qualitySpec = [args stringForKey:@"quality"];
+    const BOOL quiet = [args boolForKey:@"quiet"];
+    const BOOL reverseArray = [args boolForKey:@"reverse"];
 
     NSDictionary *codec = [NSDictionary dictionaryWithObjectsAndKeys:
                            @"avc1", @"h264",
@@ -158,10 +145,10 @@ int main(int argc, const char *argv[]) {
     DLOG(@"quiet: %i", quiet);
 
     NSFileManager *fileManager = [NSFileManager defaultManager];
-    inputPath = [[NSURL fileURLWithPath:[[NSString stringWithUTF8String:argv[1]]
-                                         stringByExpandingTildeInPath]] path];
-    destPath = [[NSURL fileURLWithPath:[[NSString stringWithUTF8String:argv[2]]
-                                        stringByExpandingTildeInPath]] path];
+    NSString *inputPath = [[NSURL fileURLWithPath:[[NSString stringWithUTF8String:argv[1]]
+                                                   stringByExpandingTildeInPath]] path];
+    NSString *destPath = [[NSURL fileURLWithPath:[[NSString stringWithUTF8String:argv[2]]
+                                                  stringByExpandingTildeInPath]] path];
 
     if (![destPath hasSuffix:@".mov"]) {
         fprintf(stderr, "Error: Output filename must be of type '.mov'\n");
@@ -173,6 +160,7 @@ int main(int argc, const char *argv[]) {
         return 1;
     }
 
+    BOOL isDir;
     if (!([fileManager fileExistsAtPath:[destPath stringByDeletingLastPathComponent]
                             isDirectory:&isDir] && isDir)) {
         fprintf(stderr,
@@ -199,7 +187,8 @@ int main(int argc, const char *argv[]) {
 
     DLOG(@"%@",imageAttributes);
 
-    imageFiles = [fileManager contentsOfDirectoryAtPath:inputPath error:&err];
+    NSError *err = nil;
+    NSArray *imageFiles = [fileManager contentsOfDirectoryAtPath:inputPath error:&err];
     imageFiles = [imageFiles sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
     int imageCount = 0;
 
