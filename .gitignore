@@ -1,1 +1,7 @@
 tlassemble
+
+*.mov
+
+*.NEF
+
+*.out
