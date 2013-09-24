@@ -61,10 +61,7 @@ void help() {
            "height = original image size\n"
            "codec = h264\n"
            "quality = high\n\n"
-           "INFO\n"
-           "- Images should be no larger than 1920 x 1080 pixels.\n"
-           "- Images have to be jpegs and have the extension '.jpg' or '.jpeg' (case insensitive).\n\n"
-           "tlassemble 1.0\n\n"
+           "tlassemble-wade 1.0\n\n"
            "This software is provided in the hope that it will be useful, but without any warranty, without even the implied warranty for merchantability or fitness for a particular purpose. The software is provided as is and its designer is not to be held responsible for any lost data or other corruption.\n\n");
 }
 
