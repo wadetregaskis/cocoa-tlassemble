@@ -66,13 +66,6 @@ void help() {
 }
 
 int main(int argc, const char *argv[]) {
-    // Command line options:
-    //
-    // codec (h264, mp4v, photojpeg, raw)
-    // fps (between 0.1 and 60)
-    // quality (high, normal, low)
-    // width (resize proportionally)
-
     @autoreleasepool {
         // Parse command line options
         NSUserDefaults *args = [NSUserDefaults standardUserDefaults];
