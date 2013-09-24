@@ -124,14 +124,6 @@ int main(int argc, const char *argv[]) {
                              [NSNumber numberWithLong:codecNormalQuality], @"normal",
                              [NSNumber numberWithLong:codecMaxQuality], @"high", nil];
 
-    if (height > 1080) {
-        fprintf(stderr, "%s",
-                "Error: Maximum movie height is 1080px, use option "
-                "-height to automatically resize images.\n"
-                "Try 'tlassemble --help' for more information.\n");
-        return 1;
-    }
-
     if (fps == 0.0) {
         fps = 30.0;
     }
