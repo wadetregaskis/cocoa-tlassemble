@@ -247,50 +247,64 @@ int main(int argc, const char *argv[]) {
     }
     [movie setAttribute:[NSNumber numberWithBool:YES] forKey:QTMovieEditableAttribute];
 
-    long timeScale = 100000;
-    long long timeValue = (long long) ceil((double) timeScale / fps);
-    QTTime duration = QTMakeTime(timeValue, timeScale);
-
-    NSImage *image;
-    NSImage *resizedImage;
-    NSString *fullFilename;
-
+    const long timeScale = 100000;
+    const long long timeValue = (long long) ceil((double) timeScale / fps);
+    const QTTime duration = QTMakeTime(timeValue, timeScale);
     double width = 0;
     int counter = 0;
 
     for (NSString *file in imageFiles) {
-        fullFilename = [inputPath stringByAppendingPathComponent:file];
+        NSString *fullFilename = [inputPath stringByAppendingPathComponent:file];
         if ([[fullFilename pathExtension] caseInsensitiveCompare:@"jpeg"] == NSOrderedSame ||
             [[fullFilename pathExtension] caseInsensitiveCompare:@"png"] == NSOrderedSame ||
             [[fullFilename pathExtension] caseInsensitiveCompare:@"nef"] == NSOrderedSame ||
             [[fullFilename pathExtension] caseInsensitiveCompare:@"jpg"] == NSOrderedSame) {
             NSAutoreleasePool *innerPool = [[NSAutoreleasePool alloc] init];
-            image = [[NSImage alloc] initWithContentsOfFile:fullFilename];
+            NSImage *image = [[NSImage alloc] initWithContentsOfFile:fullFilename];
 
-            if (height != 0) {
-                //get proportion
-                double ratio = [image size].width/[image size].height;
-                width = height*ratio;
-                resizedImage = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
-                [resizedImage lockFocus];
-                [image drawInRect:NSMakeRect(0.f, 0.f, width, height)
-                         fromRect:NSZeroRect
-                        operation:NSCompositeSourceOver fraction:1.f];
-                [resizedImage unlockFocus];
+            if (image) {
+                const double width = (height
+                                      ? height * (image.size.width / image.size.height)
+                                      : image.size.width);
 
-                [movie addImage:resizedImage
-                    forDuration:duration
-                 withAttributes:imageAttributes];
+                if (!height) {
+                    height = image.size.height;
+                }
 
-                [resizedImage release];
+                const double kSafeHeightLimit = 2512;
+                if (height > kSafeHeightLimit) {
+                    static BOOL warnedOnce = NO;
+
+                    if (!warnedOnce) {
+                        fprintf(stderr, "Warning: movies with heights greater than %lf pixels are known to not work sometimes (the resulting movie file will be essentially empty).\n", kSafeHeightLimit);
+                        warnedOnce = YES;
+                    }
+                }
+
+                // Always "render" the image, even if not actually resizing, as this ensures formats like NEF actually work (otherwise the output movie gets weird, with one empty, broken track per source image).
+                NSImage *renderedImage = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
+
+                if (renderedImage) {
+                    [renderedImage lockFocus];
+                    [image drawInRect:NSMakeRect(0.f, 0.f, width, height)
+                             fromRect:NSZeroRect
+                            operation:NSCompositeSourceOver fraction:1.f];
+                    [renderedImage unlockFocus];
+
+                    [movie addImage:renderedImage
+                        forDuration:duration
+                     withAttributes:imageAttributes];
+
+                    [renderedImage release];
+                } else {
+                    fprintf(stderr, "Unable to create render buffer for frame \"%s\" with size %lf x %lf (%i of %i)\n", [file UTF8String], width, height, counter, imageCount);
+                }
+
+                [image release];
+            } else {
+                fprintf(stderr, "Unable to read \"%s\" (%i of %i)\n", [file UTF8String], counter, imageCount);
             }
-            else {
-                [movie addImage:image
-                    forDuration:duration
-                 withAttributes:imageAttributes];
-            }
 
-            [image release];
             [innerPool release];
             counter++;
             if (!quiet) {
