@@ -8,7 +8,7 @@ If you find this software useful, please consider making a small donation to fun
 To build you must install XCode and the XCode developer tools, then:
 
 ```bash
-$ git clone https://github.com/dbridges/cocoa-tlassemble.git
+$ git clone https://github.com/wadetregaskis/cocoa-tlassemble.git
 $ cd cocoa-tlassemble
 $ make
 $ sudo cp tlassemble /usr/local/bin/ # or your own local bin directory
@@ -16,27 +16,27 @@ $ sudo cp tlassemble /usr/local/bin/ # or your own local bin directory
 
 ###Usage
 ```bash
-$ tlassemble INPUTDIRECTORY OUTPUTFILENAME [OPTIONS]
+$ tlassemble [FLAGS...] SOURCE [SOURCE...] DESTINATION.MOV
 ```
 
 ###Examples
 ```bash
 $ tlassemble ./images time_lapse.mov
-$ tlassemble ./images time_lapse.mov -fps 30 -height 720 -codec h264 -quality high
-$ tlassemble ./images time_lapse.mov -quiet yes
+$ tlassemble --fps 30 --height 720 --codec h264 --quality high imagesA imagesB time_lapse.mov
+$ tlassemble --quiet image01.jpg image02.jpg image03.jpg time_lapse.mov
 ```
 
-###Options
+###Flags
 ```
--fps: Frames per second for final movie can be anywhere between 0.1 and 60.0.
--height: If specified images are resized proportionally to height given.
--codec: Codec to use to encode can be 'h264' 'photojpeg' 'raw' or 'mpv4'.
--quality: Quality to encode with can be 'high' 'normal' 'low'.
--quiet: Set to 'yes' to suppress output during encoding.
--reverse: Set to 'yes' to reverse the order that images are displayed in the movie.
--sort: Sort order for the input images (can be 'creation' [default] or 'name').
+--codec: Codec with which to compress the resulting movie.  Defaults to 'h264'.
+--fps: Frame rate of the movie.  Defaults to 30.
+--height: The desired height of the movie; source frames will be proportionately resized.  If unspecified the height is taken from the source frames.
+--quality: Quality level to encode with can.  Defaults to 'high'.
+--quiet: Supresses non-error output.  Off by default.
+--reverse: Reverse the sort order.
+--sort: Sort method for the input images.  Defaults to 'creation'.
 ```
 
 ###License
-tlassemble can be distributed in accordance with the BSD New license. See the top of [tlassemble.m](https://github.com/dbridges/cocoa-tlassemble/blob/master/tlassemble.m) for full license terms.
+tlassemble can be distributed in accordance with the BSD New license.  See the top of [tlassemble.m](https://github.com/wadetregaskis/cocoa-tlassemble/blob/master/tlassemble.m) for full license terms.
 
