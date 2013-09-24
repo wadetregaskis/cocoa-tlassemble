@@ -55,6 +55,7 @@ void help() {
            "-quality: Quality to encode with can be 'high' 'normal' 'low'.\n"
            "-quiet: Set to 'yes' to suppress output during encoding.\n"
            "-reverse: Set to 'yes' to reverse the order that images are displayed in the movie.\n"
+           "-sort: Sort order for the input images (can be 'creation' [default] or 'name').\n"
            "\n"
            "DEFAULTS\n"
            "fps = 30\n"
@@ -86,7 +87,8 @@ int main(int argc, const char *argv[]) {
         NSString *codecSpec = [args stringForKey:@"codec"];
         NSString *qualitySpec = [args stringForKey:@"quality"];
         const BOOL quiet = [args boolForKey:@"quiet"];
-        const BOOL reverseArray = [args boolForKey:@"reverse"];
+        const BOOL reverseOrder = [args boolForKey:@"reverse"];
+        NSString *sortAttribute = [args stringForKey:@"sort"];
 
         NSDictionary *codec = @{ @"h264": @"avc1",
                                  @"mpv4": @"mpv4",
@@ -96,6 +98,34 @@ int main(int argc, const char *argv[]) {
         NSDictionary *quality = @{ @"low": @(codecLowQuality),
                                    @"normal": @(codecNormalQuality),
                                    @"high": @(codecMaxQuality) };
+
+        NSDictionary *sortComparators = @{
+            @"name": ^(NSURL *a, NSURL *b) {
+                return [(reverseOrder ? b : a).lastPathComponent compare:(reverseOrder ? a : b).lastPathComponent
+                                                                 options:(   NSCaseInsensitiveSearch
+                                                                           | NSNumericSearch
+                                                                           | NSDiacriticInsensitiveSearch
+                                                                           | NSWidthInsensitiveSearch
+                                                                           | NSForcedOrderingSearch)];
+            },
+            @"creation": ^(NSURL *a, NSURL *b) {
+                id aCreationDate = nil, bCreationDate = nil;
+                NSError *err = nil;
+
+                if (![a getResourceValue:&aCreationDate forKey:NSURLCreationDateKey error:&err]) {
+                    fprintf(stderr, "Unable to determine the creation date of \"%s\".\n", a.path.UTF8String);
+                    return (reverseOrder ? NSOrderedAscending : NSOrderedDescending);
+                } else if (![b getResourceValue:&bCreationDate forKey:NSURLCreationDateKey error:&err]) {
+                    fprintf(stderr, "Unable to determine the creation date of \"%s\".\n", b.path.UTF8String);
+                    return (reverseOrder ? NSOrderedDescending : NSOrderedAscending);
+                } else {
+                    return (reverseOrder ? [bCreationDate compare:aCreationDate] : [aCreationDate compare:bCreationDate]);
+                }
+            }
+        };
+
+        NSDictionary *sortFileAttributeKeys = @{ @"name" : @[],
+                                                 @"creation": @[NSURLCreationDateKey] };
 
         if (fps == 0.0) {
             fps = 30.0;
@@ -125,11 +155,21 @@ int main(int argc, const char *argv[]) {
             return 1;
         }
 
+        if (nil == sortAttribute) {
+            sortAttribute = @"creation";
+        }
+
+        if (!sortComparators[sortAttribute]) {
+            fprintf(stderr, "Unrecognised sort method \"%s\".\n", sortAttribute.UTF8String);
+            return 1;
+        }
+
         DLOG(@"quality: %@",qualitySpec);
         DLOG(@"codec: %@",codecSpec);
         DLOG(@"fps: %f",fps);
         DLOG(@"height: %f",height);
         DLOG(@"quiet: %@", quiet);
+        DLOG(@"sort: %@ (%s)", sortAttribute, (reverseOrder ? "reversed" : "normal"));
 
         NSFileManager *fileManager = [NSFileManager defaultManager];
         NSString *inputPath = [[NSURL fileURLWithPath:[[NSString stringWithUTF8String:argv[1]]
@@ -172,12 +212,24 @@ int main(int argc, const char *argv[]) {
 
         DLOG(@"%@",imageAttributes);
 
-        NSError *err = nil;
-        NSArray *imageFiles = [fileManager contentsOfDirectoryAtPath:inputPath error:&err];
+        NSMutableArray *imageFiles = [NSMutableArray array];
 
-        if (!imageFiles) {
-            fprintf(stderr, "Unable to enumerate files in \"%s\": %s\n", inputPath.UTF8String, (err ? err.localizedDescription.UTF8String : "unknown error"));
+        NSDirectoryEnumerator *directoryEnumerator = [fileManager enumeratorAtURL:[NSURL URLWithString:inputPath]
+                                                       includingPropertiesForKeys:sortFileAttributeKeys[sortAttribute]
+                                                                          options:(   NSDirectoryEnumerationSkipsHiddenFiles
+                                                                                    | NSDirectoryEnumerationSkipsPackageDescendants)
+                                                                     errorHandler:^(NSURL *url, NSError *error) {
+            fprintf(stderr, "Error while looking for images in \"%s\": %s\n", url.path.UTF8String, error.localizedDescription.UTF8String);
+            return YES;
+        }];
+
+        if (!directoryEnumerator) {
+            fprintf(stderr, "Unable to enumerate files in \"%s\".\n", inputPath.UTF8String);
             return -1;
+        }
+
+        for (NSURL *file in directoryEnumerator) {
+            [imageFiles addObject:file];
         }
 
         if (0 == imageFiles.count) {
@@ -185,15 +237,7 @@ int main(int argc, const char *argv[]) {
             return -1;
         }
         
-        imageFiles = [imageFiles sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
-
-        if (reverseArray) {
-            NSMutableArray *reversedArray = [NSMutableArray arrayWithCapacity:[imageFiles count]];
-            for (NSString *element in [imageFiles reverseObjectEnumerator]) {
-                [reversedArray addObject:element];
-            }
-            imageFiles = reversedArray;
-        }
+        [imageFiles sortWithOptions:NSSortConcurrent usingComparator:sortComparators[sortAttribute]];
 
         QTMovie *movie = [[QTMovie alloc] initToWritableFile:destPath error:NULL];
         if (movie == nil) {
@@ -210,9 +254,9 @@ int main(int argc, const char *argv[]) {
         unsigned long fileIndex = 1;  // Human-readable, so 1-based.
         unsigned long framesAddedSuccessfully = 0;
 
-        for (NSString *file in imageFiles) {
+        for (NSURL *file in imageFiles) {
             @autoreleasepool {
-                NSImage *image = [[NSImage alloc] initWithContentsOfFile:[inputPath stringByAppendingPathComponent:file]];
+                NSImage *image = [[NSImage alloc] initWithContentsOfURL:file];
 
                 if (image) {
                     const double width = (height
@@ -250,13 +294,13 @@ int main(int argc, const char *argv[]) {
                         ++framesAddedSuccessfully;
 
                         if (!quiet) {
-                            printf("Processed %s (%lu of %lu)\n", [file UTF8String], fileIndex, imageFiles.count);
+                            printf("Processed %s (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
                         }
                     } else {
-                        fprintf(stderr, "Unable to create render buffer for frame \"%s\" with size %lf x %lf (%lu of %lu)\n", file.UTF8String, width, height, fileIndex, imageFiles.count);
+                        fprintf(stderr, "Unable to create render buffer for frame \"%s\" with size %lf x %lf (%lu of %lu)\n", file.path.UTF8String, width, height, fileIndex, imageFiles.count);
                     }
                 } else {
-                    fprintf(stderr, "Unable to read \"%s\" (%lu of %lu)\n", file.UTF8String, fileIndex, imageFiles.count);
+                    fprintf(stderr, "Unable to read \"%s\" (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
                 }
             }
 
