@@ -233,7 +233,7 @@ int main(int argc, const char *argv[]) {
                         }
                     }
 
-                    // Always "render" the image, even if not actually resizing, as this ensures formats like NEF actually work (otherwise the output movie gets weird, with one empty, broken track per source image).
+                    // Always "render" the image, even if not actually resizing, as this ensures formats like NEF work reliably (as otherwise there seems to be some intermitent glitching).
                     NSImage *renderedImage = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
 
                     if (renderedImage) {
