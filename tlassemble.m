@@ -26,9 +26,9 @@
  */
 
 #ifdef DEBUG
-#define DLOG(fmt, args...) NSLog(@"%s:%d "fmt,__FILE__,__LINE__,args)
+#define DLOG(fmt, ...) NSLog(@"%s:%d " fmt, __FILE__, __LINE__, ## __VA_ARGS__)
 #else
-#define DLOG(fmt, args...)
+#define DLOG(fmt, ...)
 #endif
 
 #include <stdio.h>
