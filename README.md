@@ -34,6 +34,7 @@ $ tlassemble ./images time_lapse.mov -quiet yes
 -quality: Quality to encode with can be 'high' 'normal' 'low'.
 -quiet: Set to 'yes' to suppress output during encoding.
 -reverse: Set to 'yes' to reverse the order that images are displayed in the movie.
+-sort: Sort order for the input images (can be 'creation' [default] or 'name').
 ```
 
 ###License
