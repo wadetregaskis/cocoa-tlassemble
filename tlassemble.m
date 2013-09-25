@@ -299,12 +299,27 @@ int main(int argc, char* const argv[]) {
         const QTTime duration = QTMakeTime(timeValue, timeScale);
         unsigned long fileIndex = 1;  // Human-readable, so 1-based.
         unsigned long framesAddedSuccessfully = 0;
+        NSSize lastFrameSize = {0, 0};
 
         for (NSURL *file in imageFiles) {
             @autoreleasepool {
                 NSImage *image = [[NSImage alloc] initWithContentsOfURL:file];
 
                 if (image) {
+                    if ((0 != lastFrameSize.width) && (0 != lastFrameSize.height)) {
+                        if ((lastFrameSize.width != image.size.width) || (lastFrameSize.height != image.size.height)) {
+                            fprintf(stderr,
+                                    "Frame #%lu had the size %llu x %llu, but frame #%lu has size %llu x %llu.  The resulting movie will probably be deformed.\n",
+                                    fileIndex - 1,
+                                    (unsigned long long)lastFrameSize.width,
+                                    (unsigned long long)lastFrameSize.height,
+                                    fileIndex,
+                                    (unsigned long long)image.size.width,
+                                    (unsigned long long)image.size.height);
+                        }
+                    }
+                    lastFrameSize = image.size;
+
                     const long width = (height
                                         ? height * (image.size.width / image.size.height)
                                         : image.size.width);
