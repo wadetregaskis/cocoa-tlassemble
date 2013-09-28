@@ -47,6 +47,7 @@ int main(int argc, char* const argv[]) {
     @autoreleasepool {
         static const struct option longOptions[] = {
             {"codec",   required_argument,  NULL, 1},
+            {"dryrun",  no_argument,        NULL, 10},
             {"filter",  required_argument,  NULL, 9},
             {"fps",     required_argument,  NULL, 2},
             {"height",  required_argument,  NULL, 3},
@@ -66,6 +67,7 @@ int main(int argc, char* const argv[]) {
         BOOL reverseOrder = NO;
         NSString *sortAttribute = @"creation";
         NSMutableDictionary *filter = [NSMutableDictionary dictionary];
+        BOOL dryrun = NO;
 
         NSDictionary *codecCodes = @{ @"h264": @"avc1",
                                       @"mpv4": @"mpv4",
@@ -209,6 +211,9 @@ int main(int argc, char* const argv[]) {
 
                     break;
                 }
+                case 10:
+                    dryrun = YES;
+                    break;
                 default:
                     fprintf(stderr, "Invalid arguments (%d).\n", optionIndex);
                     return EINVAL;
@@ -297,13 +302,16 @@ int main(int argc, char* const argv[]) {
         
         [imageFiles sortWithOptions:NSSortConcurrent usingComparator:sortComparators[sortAttribute]];
 
-        QTMovie *movie = [[QTMovie alloc] initToWritableFile:destPath error:nil];
-        if (movie == nil) {
-            fprintf(stderr, "%s","Error: Unable to initialize QT object.\n"
-                    "Try 'tlassemble --help' for more information.\n");
-            return 1;
+        QTMovie *movie = (dryrun ? nil : [[QTMovie alloc] initToWritableFile:destPath error:nil]);
+
+        if (!dryrun) {
+            if (movie == nil) {
+                fprintf(stderr, "%s","Error: Unable to initialize QT object.\n"
+                        "Try 'tlassemble --help' for more information.\n");
+                return 1;
+            }
+            [movie setAttribute:@YES forKey:QTMovieEditableAttribute];
         }
-        [movie setAttribute:@YES forKey:QTMovieEditableAttribute];
 
         NSDictionary *imageAttributes = @{ QTAddImageCodecType: codec,
                                            QTAddImageCodecQuality: quality,
@@ -317,6 +325,7 @@ int main(int argc, char* const argv[]) {
         const long long timeValue = (long long) ceil((double) timeScale / fps);
         const QTTime duration = QTMakeTime(timeValue, timeScale);
         unsigned long fileIndex = 1;  // Human-readable, so 1-based.
+        unsigned long framesFilteredOut = 0;
         unsigned long framesAddedSuccessfully = 0;
         NSSize lastFrameSize = {0, 0};
 
@@ -400,27 +409,31 @@ int main(int argc, char* const argv[]) {
                                         }
                                     }
 
-                                    // Always "render" the image, even if not actually resizing, as this ensures formats like NEF work reliably (as otherwise there seems to be some intermitent glitching).
-                                    NSImage *renderedImage = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
+                                    if (!dryrun) {
+                                        // Always "render" the image, even if not actually resizing, as this ensures formats like NEF work reliably (as otherwise there seems to be some intermitent glitching).
+                                        NSImage *renderedImage = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
 
-                                    if (renderedImage) {
-                                        [renderedImage lockFocus];
-                                        [image drawInRect:NSMakeRect(0.f, 0.f, width, height)
-                                                 fromRect:NSZeroRect
-                                                operation:NSCompositeSourceOver fraction:1.f];
-                                        [renderedImage unlockFocus];
+                                        if (renderedImage) {
+                                            [renderedImage lockFocus];
+                                            [image drawInRect:NSMakeRect(0.f, 0.f, width, height)
+                                                     fromRect:NSZeroRect
+                                                    operation:NSCompositeSourceOver fraction:1.f];
+                                            [renderedImage unlockFocus];
 
-                                        [movie addImage:renderedImage
-                                            forDuration:duration
-                                         withAttributes:imageAttributes];
+                                            [movie addImage:renderedImage
+                                                forDuration:duration
+                                             withAttributes:imageAttributes];
 
-                                        ++framesAddedSuccessfully;
+                                            ++framesAddedSuccessfully;
 
-                                        if (!quiet) {
-                                            printf("Processed %s (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
+                                            if (!quiet) {
+                                                printf("Processed %s (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
+                                            }
+                                        } else {
+                                            fprintf(stderr, "Unable to create render buffer for frame \"%s\" with size %ld x %ld (%lu of %lu)\n", file.path.UTF8String, width, height, fileIndex, imageFiles.count);
                                         }
                                     } else {
-                                        fprintf(stderr, "Unable to create render buffer for frame \"%s\" with size %ld x %ld (%lu of %lu)\n", file.path.UTF8String, width, height, fileIndex, imageFiles.count);
+                                        ++framesAddedSuccessfully;
                                     }
                                 } else {
                                     fprintf(stderr, "Unable to Cocoaify \"%s\" (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
@@ -431,6 +444,7 @@ int main(int argc, char* const argv[]) {
                                 fprintf(stderr, "Unable to render \"%s\" (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
                             }
                         } else {
+                            ++framesFilteredOut;
                             printf("Skipping \"%s\" that doesn't match filter (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
                             //NSLog(@"Properties of \"%@\" are: %@", file.path, imageProperties);
                         }
@@ -448,15 +462,26 @@ int main(int argc, char* const argv[]) {
         }
 
         if (0 < framesAddedSuccessfully) {
-            if (![movie updateMovieFile]) {
+            if (!dryrun && ![movie updateMovieFile]) {
                 fprintf(stderr, "Unable to complete creation of movie (usually meaning QTKitServer just crashed due to a bug - sorry, not my fault).\n");
                 return -1;
             } else {
                 if (framesAddedSuccessfully != imageFiles.count) {
-                    fprintf(stderr, "Warning: source folder contained %lu files but only %lu were readable as images.\n", imageFiles.count, framesAddedSuccessfully);
+                    fprintf(stderr, "Warning: source folder contained %lu files but only %lu were readable as images (of which %lu were filtered out).\n", imageFiles.count, framesAddedSuccessfully, framesFilteredOut);
                 } else {
-                    if (!quiet) {
-                        printf("Successfully created %s\n", [destPath stringByAbbreviatingWithTildeInPath].UTF8String);
+                    if (dryrun) {
+                        printf("Would probably have successfully created \"%s\" out of %lu images (%lu others being filtered out, and %lu other files not being readable).\n",
+                               [destPath stringByAbbreviatingWithTildeInPath].UTF8String,
+                               framesAddedSuccessfully,
+                               framesFilteredOut,
+                               imageFiles.count - (framesAddedSuccessfully + framesFilteredOut));
+                    } else {
+                        if (!quiet) {
+                            printf("Successfully created %s out of %lu images (%lu others filtered out).\n",
+                                   [destPath stringByAbbreviatingWithTildeInPath].UTF8String,
+                                   framesAddedSuccessfully,
+                                   framesFilteredOut);
+                        }
                     }
                 }
 
