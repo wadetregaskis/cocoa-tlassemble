@@ -36,8 +36,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
+#import <CoreFoundation/CoreFoundation.h>
+#import <Foundation/Foundation.h>
+#import <ImageIO/ImageIO.h>
 #import <QTKit/QTKit.h>
 
 
@@ -294,6 +296,8 @@ int main(int argc, char* const argv[]) {
 
         DLOG(@"%@",imageAttributes);
 
+        NSDictionary *imageSourceOptions = @{ (__bridge NSString*)kCGImageSourceShouldAllowFloat: @YES };
+
         const long timeScale = 100000;
         const long long timeValue = (long long) ceil((double) timeScale / fps);
         const QTTime duration = QTMakeTime(timeValue, timeScale);
@@ -303,63 +307,87 @@ int main(int argc, char* const argv[]) {
 
         for (NSURL *file in imageFiles) {
             @autoreleasepool {
-                NSImage *image = [[NSImage alloc] initWithContentsOfURL:file];
+                CGImageSourceRef imageSource = CGImageSourceCreateWithURL((__bridge CFURLRef)file, (__bridge CFDictionaryRef)imageSourceOptions);
 
-                if (image) {
-                    if ((0 != lastFrameSize.width) && (0 != lastFrameSize.height)) {
-                        if ((lastFrameSize.width != image.size.width) || (lastFrameSize.height != image.size.height)) {
-                            fprintf(stderr,
-                                    "Frame #%lu had the size %llu x %llu, but frame #%lu has size %llu x %llu.  The resulting movie will probably be deformed.\n",
-                                    fileIndex - 1,
-                                    (unsigned long long)lastFrameSize.width,
-                                    (unsigned long long)lastFrameSize.height,
-                                    fileIndex,
-                                    (unsigned long long)image.size.width,
-                                    (unsigned long long)image.size.height);
-                        }
-                    }
-                    lastFrameSize = image.size;
+                if (imageSource) {
+                    NSDictionary *imageProperties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(imageSource, 0, (__bridge CFDictionaryRef)imageSourceOptions));
 
-                    const long width = (height
-                                        ? height * (image.size.width / image.size.height)
-                                        : image.size.width);
+                    if (imageProperties) {
+                        NSLog(@"Properties of \"%@\" are: %@", file.path, imageProperties);
 
-                    if (!height) {
-                        height = image.size.height;
-                    }
+                        CGImageRef rawImage = CGImageSourceCreateImageAtIndex(imageSource, 0, (__bridge CFDictionaryRef)imageSourceOptions);
 
-                    const unsigned long kSafeHeightLimit = 2512;
-                    if (height > kSafeHeightLimit) {
-                        static BOOL warnedOnce = NO;
+                        if (rawImage) {
+                            NSImage *image = [[NSImage alloc] initWithCGImage:rawImage size:NSZeroSize];
 
-                        if (!warnedOnce) {
-                            fprintf(stderr, "Warning: movies with heights greater than %lu pixels are known to not work sometimes (the resulting movie file will be essentially empty).\n", kSafeHeightLimit);
-                            warnedOnce = YES;
-                        }
-                    }
+                            if (image) {
+                                if ((0 != lastFrameSize.width) && (0 != lastFrameSize.height)) {
+                                    if ((lastFrameSize.width != image.size.width) || (lastFrameSize.height != image.size.height)) {
+                                        fprintf(stderr,
+                                                "Frame #%lu had the size %llu x %llu, but frame #%lu has size %llu x %llu.  The resulting movie will probably be deformed.\n",
+                                                fileIndex - 1,
+                                                (unsigned long long)lastFrameSize.width,
+                                                (unsigned long long)lastFrameSize.height,
+                                                fileIndex,
+                                                (unsigned long long)image.size.width,
+                                                (unsigned long long)image.size.height);
+                                    }
+                                }
+                                lastFrameSize = image.size;
 
-                    // Always "render" the image, even if not actually resizing, as this ensures formats like NEF work reliably (as otherwise there seems to be some intermitent glitching).
-                    NSImage *renderedImage = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
+                                const long width = (height
+                                                    ? height * (image.size.width / image.size.height)
+                                                    : image.size.width);
 
-                    if (renderedImage) {
-                        [renderedImage lockFocus];
-                        [image drawInRect:NSMakeRect(0.f, 0.f, width, height)
-                                 fromRect:NSZeroRect
-                                operation:NSCompositeSourceOver fraction:1.f];
-                        [renderedImage unlockFocus];
+                                if (!height) {
+                                    height = image.size.height;
+                                }
 
-                        [movie addImage:renderedImage
-                            forDuration:duration
-                         withAttributes:imageAttributes];
+                                const unsigned long kSafeHeightLimit = 2512;
+                                if (height > kSafeHeightLimit) {
+                                    static BOOL warnedOnce = NO;
 
-                        ++framesAddedSuccessfully;
+                                    if (!warnedOnce) {
+                                        fprintf(stderr, "Warning: movies with heights greater than %lu pixels are known to not work sometimes (the resulting movie file will be essentially empty).\n", kSafeHeightLimit);
+                                        warnedOnce = YES;
+                                    }
+                                }
 
-                        if (!quiet) {
-                            printf("Processed %s (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
+                                // Always "render" the image, even if not actually resizing, as this ensures formats like NEF work reliably (as otherwise there seems to be some intermitent glitching).
+                                NSImage *renderedImage = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
+
+                                if (renderedImage) {
+                                    [renderedImage lockFocus];
+                                    [image drawInRect:NSMakeRect(0.f, 0.f, width, height)
+                                             fromRect:NSZeroRect
+                                            operation:NSCompositeSourceOver fraction:1.f];
+                                    [renderedImage unlockFocus];
+
+                                    [movie addImage:renderedImage
+                                        forDuration:duration
+                                     withAttributes:imageAttributes];
+
+                                    ++framesAddedSuccessfully;
+
+                                    if (!quiet) {
+                                        printf("Processed %s (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
+                                    }
+                                } else {
+                                    fprintf(stderr, "Unable to create render buffer for frame \"%s\" with size %ld x %ld (%lu of %lu)\n", file.path.UTF8String, width, height, fileIndex, imageFiles.count);
+                                }
+                            } else {
+                                fprintf(stderr, "Unable to Cocoaify \"%s\" (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
+                            }
+
+                            CGImageRelease(rawImage);
+                        } else {
+                            fprintf(stderr, "Unable to render \"%s\" (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
                         }
                     } else {
-                        fprintf(stderr, "Unable to create render buffer for frame \"%s\" with size %ld x %ld (%lu of %lu)\n", file.path.UTF8String, width, height, fileIndex, imageFiles.count);
+                        fprintf(stderr, "Unable to get metadata for \"%s\" (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
                     }
+
+                    CFRelease(imageSource);
                 } else {
                     fprintf(stderr, "Unable to read \"%s\" (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
                 }
