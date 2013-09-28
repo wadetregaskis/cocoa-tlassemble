@@ -29,6 +29,8 @@ $ tlassemble --quiet image01.jpg image02.jpg image03.jpg time_lapse.mov
 ###Flags
 ```
 --codec: Codec with which to compress the resulting movie.  Defaults to 'h264'.
+--dryrun: Don't actually create the output movie.  Simulates most of the process, however, to give you a good idea of how it'd go.  Off by default.
+--filter: Specify a filter on the image metadata for each frame.  e.g. 'Model=Nikon D5200'.  May be specified multiple times to add successive filters.
 --fps: Frame rate of the movie.  Defaults to 30.
 --height: The desired height of the movie; source frames will be proportionately resized.  If unspecified the height is taken from the source frames.
 --quality: Quality level to encode with can.  Defaults to 'high'.

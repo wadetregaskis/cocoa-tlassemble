@@ -148,6 +148,8 @@ int main(int argc, char* const argv[]) {
                            "\n"
                            "FLAGS:\n"
                            "\t--codec: Codec with which to compress the resulting movie.  Defaults to 'h264'.\n"
+                           "\t--dryrun: Don't actually create the output movie.  Simulates most of the process, however, to give you a good idea of how it'd go.  Off by default.\n"
+                           "\t--filter: Specify a filter on the image metadata for each frame.  e.g. 'Model=Nikon D5200'.  May be specified multiple times to add successive filters.\n"
                            "\t--fps: Frame rate of the movie.  Defaults to 30.\n"
                            "\t--height: The desired height of the movie; source frames will be proportionately resized.  If unspecified the height is taken from the source frames.\n"
                            "\t--quality: Quality level to encode with can.  Defaults to 'high'.\n"
