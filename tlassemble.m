@@ -149,7 +149,7 @@ int main(int argc, char* const argv[]) {
                            "FLAGS:\n"
                            "\t--codec: Codec with which to compress the resulting movie.  Defaults to 'h264'.\n"
                            "\t--dryrun: Don't actually create the output movie.  Simulates most of the process, however, to give you a good idea of how it'd go.  Off by default.\n"
-                           "\t--filter: Specify a filter on the image metadata for each frame.  e.g. 'Model=Nikon D5200'.  May be specified multiple times to add successive filters.\n"
+                           "\t--filter: Specify a filter on the image metadata for each frame.  e.g. 'Model=Nikon D5200'.  May be specified multiple times to add successive filters.  Filters are case insensitive.\n"
                            "\t--fps: Frame rate of the movie.  Defaults to 30.\n"
                            "\t--height: The desired height of the movie; source frames will be proportionately resized.  If unspecified the height is taken from the source frames.\n"
                            "\t--quality: Quality level to encode with can.  Defaults to 'high'.\n"
@@ -205,7 +205,7 @@ int main(int argc, char* const argv[]) {
 
                     if (2 == pair.count) {
                         NSCharacterSet *whitespace = NSCharacterSet.whitespaceAndNewlineCharacterSet;
-                        filter[[pair[0] stringByTrimmingCharactersInSet:whitespace]] = [pair[1] stringByTrimmingCharactersInSet:whitespace];
+                        filter[[pair[0] stringByTrimmingCharactersInSet:whitespace].lowercaseString] = [pair[1] stringByTrimmingCharactersInSet:whitespace];
                     } else {
                         fprintf(stderr, "Unable to parse filter argument \"%s\" - expected something like 'property = value'.\n", optarg);
                         return EINVAL;
@@ -348,11 +348,11 @@ int main(int argc, char* const argv[]) {
                             NSDictionary *currentDictionary = imageProperties;
 
                             while (currentDictionary && (filter.count > matches.count)) {
-                                [currentDictionary enumerateKeysAndObjectsUsingBlock:^void(id key, id obj, BOOL *stop) {
+                                [currentDictionary enumerateKeysAndObjectsUsingBlock:^void(NSString *key, id obj, BOOL *stop) {
                                     if ([obj isKindOfClass:NSDictionary.class]) {
                                         [subdictionaries addObject:obj];
                                     } else {
-                                        NSString *filterValue = filter[key];
+                                        NSString *filterValue = filter[key.lowercaseString];
 
                                         if (filterValue) {
                                             if (NSOrderedSame == [filterValue localizedCaseInsensitiveCompare:((NSObject*)obj).description]) {
