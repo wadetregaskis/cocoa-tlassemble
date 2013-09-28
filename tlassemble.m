@@ -47,6 +47,7 @@ int main(int argc, char* const argv[]) {
     @autoreleasepool {
         static const struct option longOptions[] = {
             {"codec",   required_argument,  NULL, 1},
+            {"filter",  required_argument,  NULL, 9},
             {"fps",     required_argument,  NULL, 2},
             {"height",  required_argument,  NULL, 3},
             {"help",    no_argument,        NULL, 4},
@@ -64,7 +65,7 @@ int main(int argc, char* const argv[]) {
         BOOL quiet = NO;
         BOOL reverseOrder = NO;
         NSString *sortAttribute = @"creation";
-
+        NSMutableDictionary *filter = [NSMutableDictionary dictionary];
 
         NSDictionary *codecCodes = @{ @"h264": @"avc1",
                                       @"mpv4": @"mpv4",
@@ -195,8 +196,52 @@ int main(int argc, char* const argv[]) {
                         return EINVAL;
                     }
                     break;
+                case 9: {
+                    NSError *err = nil;
+                    id parsedFilter = [NSPropertyListSerialization propertyListWithData:[[@(optarg) stringByAppendingString:@";"] dataUsingEncoding:NSUTF8StringEncoding]
+                                                                                options:NSPropertyListImmutable
+                                                                                 format:NULL
+                                                                                  error:&err];
+
+                    if (parsedFilter) {
+                        if ([parsedFilter isKindOfClass:NSArray.class]) {
+                            for (id subclause in (NSArray*)parsedFilter) {
+                                if ([subclause isKindOfClass:NSDictionary.class]) {
+                                    [subclause enumerateKeysAndObjectsUsingBlock:^void(id key, id obj, BOOL *stop) {
+                                        if ([key isKindOfClass:NSString.class] && ([obj isKindOfClass:NSString.class] || [obj isKindOfClass:NSNumber.class])) {
+                                            filter[key] = ((NSNumber*)obj).description;
+                                        } else {
+                                            fprintf(stderr, "Invalid filter argument \"%s\" - key=value pairs must have strings for keys and strings or numbers for values.\n", optarg);
+                                            exit(EINVAL);
+                                        }
+                                    }];
+                                } else {
+                                    fprintf(stderr, "Invalid filter argument \"%s\" - lists must be composed of key=value pairs.\n", optarg);
+                                    return EINVAL;
+                                }
+                            }
+                        } else if ([parsedFilter isKindOfClass:NSDictionary.class]) {
+                            [(NSDictionary*)parsedFilter enumerateKeysAndObjectsUsingBlock:^void(id key, id obj, BOOL *stop) {
+                                if ([key isKindOfClass:NSString.class] && ([obj isKindOfClass:NSString.class] || [obj isKindOfClass:NSNumber.class])) {
+                                    filter[key] = ((NSNumber*)obj).description;
+                                } else {
+                                    fprintf(stderr, "Invalid filter argument \"%s\" - key=value pairs must have strings for keys and strings or numbers for values.\n", optarg);
+                                    exit(EINVAL);
+                                }
+                            }];
+                        } else {
+                            fprintf(stderr, "Invalid filter argument \"%s\" - argument must be a key=value pair or a list thereof.\n", optarg);
+                            return EINVAL;
+                        }
+                    } else {
+                        fprintf(stderr, "Unable to parse filter argument \"%s\": %s\n", optarg, err.localizedDescription.UTF8String);
+                        return EINVAL;
+                    }
+
+                    break;
+                }
                 default:
-                    fprintf(stderr, "Invalid arguments.\n");
+                    fprintf(stderr, "Invalid arguments (%d).\n", optionIndex);
                     return EINVAL;
             }
         }
@@ -209,6 +254,7 @@ int main(int argc, char* const argv[]) {
             return EINVAL;
         }
 
+        DLOG(@"filter: %@", filter);
         DLOG(@"fps: %f", fps);
         DLOG(@"height: %ld", height);
         DLOG(@"codec: %@", codec);
