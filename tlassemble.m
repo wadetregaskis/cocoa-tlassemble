@@ -197,44 +197,13 @@ int main(int argc, char* const argv[]) {
                     }
                     break;
                 case 9: {
-                    NSError *err = nil;
-                    id parsedFilter = [NSPropertyListSerialization propertyListWithData:[[@(optarg) stringByAppendingString:@";"] dataUsingEncoding:NSUTF8StringEncoding]
-                                                                                options:NSPropertyListImmutable
-                                                                                 format:NULL
-                                                                                  error:&err];
+                    NSArray *pair = [@(optarg) componentsSeparatedByString:@"="];
 
-                    if (parsedFilter) {
-                        if ([parsedFilter isKindOfClass:NSArray.class]) {
-                            for (id subclause in (NSArray*)parsedFilter) {
-                                if ([subclause isKindOfClass:NSDictionary.class]) {
-                                    [subclause enumerateKeysAndObjectsUsingBlock:^void(id key, id obj, BOOL *stop) {
-                                        if ([key isKindOfClass:NSString.class] && ([obj isKindOfClass:NSString.class] || [obj isKindOfClass:NSNumber.class])) {
-                                            filter[key] = ((NSNumber*)obj).description;
-                                        } else {
-                                            fprintf(stderr, "Invalid filter argument \"%s\" - key=value pairs must have strings for keys and strings or numbers for values.\n", optarg);
-                                            exit(EINVAL);
-                                        }
-                                    }];
-                                } else {
-                                    fprintf(stderr, "Invalid filter argument \"%s\" - lists must be composed of key=value pairs.\n", optarg);
-                                    return EINVAL;
-                                }
-                            }
-                        } else if ([parsedFilter isKindOfClass:NSDictionary.class]) {
-                            [(NSDictionary*)parsedFilter enumerateKeysAndObjectsUsingBlock:^void(id key, id obj, BOOL *stop) {
-                                if ([key isKindOfClass:NSString.class] && ([obj isKindOfClass:NSString.class] || [obj isKindOfClass:NSNumber.class])) {
-                                    filter[key] = ((NSNumber*)obj).description;
-                                } else {
-                                    fprintf(stderr, "Invalid filter argument \"%s\" - key=value pairs must have strings for keys and strings or numbers for values.\n", optarg);
-                                    exit(EINVAL);
-                                }
-                            }];
-                        } else {
-                            fprintf(stderr, "Invalid filter argument \"%s\" - argument must be a key=value pair or a list thereof.\n", optarg);
-                            return EINVAL;
-                        }
+                    if (2 == pair.count) {
+                        NSCharacterSet *whitespace = NSCharacterSet.whitespaceAndNewlineCharacterSet;
+                        filter[[pair[0] stringByTrimmingCharactersInSet:whitespace]] = [pair[1] stringByTrimmingCharactersInSet:whitespace];
                     } else {
-                        fprintf(stderr, "Unable to parse filter argument \"%s\": %s\n", optarg, err.localizedDescription.UTF8String);
+                        fprintf(stderr, "Unable to parse filter argument \"%s\" - expected something like 'property = value'.\n", optarg);
                         return EINVAL;
                     }
 
