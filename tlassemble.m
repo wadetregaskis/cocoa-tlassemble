@@ -413,7 +413,7 @@ int main(int argc, char* const argv[]) {
 
         if (0 < framesAddedSuccessfully) {
             if (![movie updateMovieFile]) {
-                fprintf(stderr, "Unable to complete creation of movie.\n");
+                fprintf(stderr, "Unable to complete creation of movie (usually meaning QTKitServer just crashed due to a bug - sorry, not my fault).\n");
                 return -1;
             } else {
                 if (framesAddedSuccessfully != imageFiles.count) {
