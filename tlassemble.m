@@ -304,14 +304,15 @@ int main(int argc, char* const argv[]) {
         
         [imageFiles sortWithOptions:NSSortConcurrent usingComparator:sortComparators[sortAttribute]];
 
-        QTMovie *movie = (dryrun ? nil : [[QTMovie alloc] initToWritableFile:destPath error:nil]);
+        NSError *err = nil;
+        QTMovie *movie = (dryrun ? nil : [[QTMovie alloc] initToWritableFile:destPath error:&err]);
 
         if (!dryrun) {
             if (movie == nil) {
-                fprintf(stderr, "%s","Error: Unable to initialize QT object.\n"
-                        "Try 'tlassemble --help' for more information.\n");
+                fprintf(stderr, "Error: Unable to initialize QT object: %s.\nTry 'tlassemble --help' for more information.\n", err.localizedDescription.UTF8String);
                 return 1;
             }
+
             [movie setAttribute:@YES forKey:QTMovieEditableAttribute];
         }
 
