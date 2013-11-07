@@ -33,15 +33,145 @@
 
 #include <errno.h>
 #include <getopt.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #import <AppKit/AppKit.h>
+#import <AVFoundation/AVFoundation.h>
 #import <CoreFoundation/CoreFoundation.h>
+#import <CoreGraphics/CoreGraphics.h>
+#import <CoreMedia/CoreMedia.h>
+#import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 #import <ImageIO/ImageIO.h>
-#import <QTKit/QTKit.h>
+#import <VideoToolbox/VideoToolbox.h>
 
+
+static const char* DescriptionOfCVReturn(CVReturn status) {
+    switch (status) {
+        case kCVReturnError:
+            return "An otherwise undefined error occurred.";
+        case kCVReturnInvalidArgument:
+            return "Invalid function parameter. For example, out of range or the wrong type.";
+        case kCVReturnAllocationFailed:
+            return "Memory allocation for a buffer or buffer pool failed.";
+        case kCVReturnInvalidDisplay:
+            return "The display specified when creating a display link is invalid.";
+        case kCVReturnDisplayLinkAlreadyRunning:
+            return "The specified display link is already running.";
+        case kCVReturnDisplayLinkNotRunning:
+            return "The specified display link is not running.";
+        case kCVReturnDisplayLinkCallbacksNotSet:
+            return "No callback registered for the specified display link. You must set either the output callback or both the render and display callbacks.";
+        case kCVReturnInvalidPixelFormat:
+            return "The buffer does not support the specified pixel format.";
+        case kCVReturnInvalidSize:
+            return "The buffer cannot support the requested buffer size (usually too big).";
+        case kCVReturnInvalidPixelBufferAttributes:
+            return "A buffer cannot be created with the specified attributes.";
+        case kCVReturnPixelBufferNotOpenGLCompatible:
+            return "The pixel buffer is not compatible with OpenGL due to an unsupported buffer size, pixel format, or attribute.";
+        case kCVReturnWouldExceedAllocationThreshold:
+            return "Allocation for a pixel buffer failed because the threshold value set for the kCVPixelBufferPoolAllocationThresholdKey key in the CVPixelBufferPoolCreatePixelBufferWithAuxAttributes function would be surpassed.";
+        case kCVReturnPoolAllocationFailed:
+            return "Allocation for a buffer pool failed, most likely due to a lack of resources. Check to make sure your parameters are in range.";
+        case kCVReturnInvalidPoolAttributes:
+            return "A buffer pool cannot be created with the specified attributes.";
+        default:
+            return "Unknown.";
+    }
+}
+
+static CVPixelBufferRef CreatePixelBufferFromCGImage(CGImageRef image, NSSize frameSize) {
+    // I've seen the following two settings recommended, but I'm not sure why we'd bother overriding them?
+    //NSDictionary *pixelBufferOptions = @{kCVPixelBufferCGImageCompatibilityKey: @NO,
+    //                                     kCVPixelBufferCGBitmapContextCompatibilityKey, @NO};
+    CVPixelBufferRef pixelBuffer = NULL;
+    CVReturn status = CVPixelBufferCreate(kCFAllocatorDefault,
+                                          frameSize.width,
+                                          frameSize.height,
+                                          kCVPixelFormatType_32ARGB,
+                                          NULL,
+                                          &pixelBuffer);
+
+    if (kCVReturnSuccess == status) {
+        status = CVPixelBufferLockBaseAddress(pixelBuffer, 0);
+
+        if (kCVReturnSuccess == status) {
+            void *data = CVPixelBufferGetBaseAddress(pixelBuffer);
+
+            if (data) {
+                CGColorSpaceRef colourSpace = CGColorSpaceCreateDeviceRGB();
+
+                if (colourSpace) {
+                    CGContextRef context = CGBitmapContextCreate(data,
+                                                                 frameSize.width,
+                                                                 frameSize.height,
+                                                                 8, // Bits per component
+                                                                 CVPixelBufferGetBytesPerRow(pixelBuffer),
+                                                                 colourSpace,
+                                                                 (CGBitmapInfo)kCGImageAlphaNoneSkipFirst); // + kCGBitmapByteOrder32Big?  Or 16Big?
+
+                    if (context) {
+                        CGContextDrawImage(context,
+                                           CGRectMake(0, 0, frameSize.width, frameSize.height),
+                                           image);
+                        CGContextRelease(context);
+                    } else {
+                        fprintf(stderr, "Unable to create a new bitmap context around the pixel buffer.\n");
+                        status = kCVReturnError;
+                    }
+
+                    CGColorSpaceRelease(colourSpace);
+                } else {
+                    fprintf(stderr, "Unable to create a device RGB colour space.\n");
+                }
+            } else {
+                fprintf(stderr, "Unable to get a raw pointer to the pixel buffer.\n");
+                status = kCVReturnError;
+            }
+
+            const CVReturn nonFatalStatus = CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
+
+            if (kCVReturnSuccess != nonFatalStatus) {
+                fprintf(stderr, "Warning: unable to unlock pixel buffer, error #%d: %s\n", nonFatalStatus, DescriptionOfCVReturn(nonFatalStatus));
+            }
+        } else {
+            fprintf(stderr, "Unable to lock pixel buffer, error #%d: %s\n", status, DescriptionOfCVReturn(status));
+        }
+    } else {
+        fprintf(stderr, "Unable to create a pixel buffer, error #%d: %s\n", status, DescriptionOfCVReturn(status));
+    }
+
+    if (kCVReturnSuccess != status) {
+        CVPixelBufferRelease(pixelBuffer), pixelBuffer = NULL;
+    }
+
+    return pixelBuffer;
+}
+
+static void compressedFrameOutput(void *untypedAssetWriter,
+                                  void *frameNumber,
+                                  OSStatus status,
+                                  VTEncodeInfoFlags infoFlags,
+                                  CMSampleBufferRef sampleBuffer) {
+    if (0 != status) {
+        fprintf(stderr, "Unable to compress frame #%"PRIuPTR", error #%d.\n", (uintptr_t)frameNumber, status);
+        exit(1);
+    }
+
+    AVAssetWriterInput *assetWriter = (__bridge AVAssetWriterInput*)untypedAssetWriter;
+
+    if (assetWriter) {
+        if ([assetWriter appendSampleBuffer:sampleBuffer]) {
+            printf("Completed frame #%"PRIuPTR".\n", (uintptr_t)frameNumber);
+        } else {
+            fprintf(stderr, "Unable to append compressed frame #%"PRIuPTR" to file.\n", (uintptr_t)frameNumber);
+            exit(1);
+        }
+    }
+}
 
 int main(int argc, char* const argv[]) {
     @autoreleasepool {
@@ -52,7 +182,7 @@ int main(int argc, char* const argv[]) {
             {"fps",     required_argument,  NULL, 2},
             {"height",  required_argument,  NULL, 3},
             {"help",    no_argument,        NULL, 4},
-            {"quality", required_argument,  NULL, 5},
+            //{"quality", required_argument,  NULL, 5},
             {"quiet",   no_argument,        NULL, 6},
             {"reverse", no_argument,        NULL, 7},
             {"sort",    required_argument,  NULL, 8},
@@ -62,7 +192,6 @@ int main(int argc, char* const argv[]) {
         double fps = 30.0;
         long height = 0;
         NSString *codec = @"avc1";
-        NSNumber *quality = @(codecMaxQuality);
         BOOL quiet = NO;
         BOOL reverseOrder = NO;
         NSString *sortAttribute = @"creation";
@@ -73,9 +202,6 @@ int main(int argc, char* const argv[]) {
                                       @"mpv4": @"mpv4",
                                       @"photojpeg" : @"jpeg",
                                       @"raw": @"raw " };
-        NSDictionary *qualityConstants = @{ @"low": @(codecLowQuality),
-                                            @"normal": @(codecNormalQuality),
-                                            @"high": @(codecMaxQuality) };
 
         NSDictionary *sortComparators = @{
             @"name": ^(NSURL *a, NSURL *b) {
@@ -166,20 +292,6 @@ int main(int argc, char* const argv[]) {
                            "There isn't one.  This software is provided in the hope that it will be useful, but without any warranty, without even the implied warranty for merchantability or fitness for a particular purpose.  The software is provided as-is and its authors are not to be held responsible for any harm that may result from its use, including (but not limited to) data loss or corruption.\n",
                            argv[0], argv[0], argv[0], argv[0]);
                     return 0;
-                case 5:
-                    quality = qualityConstants[@(optarg)];
-                    if (!quality) {
-                        fprintf(stderr, "Unsupported quality \"%s\".  Supported qualities are:", optarg);
-
-                        for (NSString *qualityConstant in qualityConstants) {
-                            fprintf(stderr, " %s", qualityConstant.UTF8String);
-                        }
-
-                        fprintf(stderr, "\n");
-
-                        return EINVAL;
-                    }
-                    break;
                 case 6:
                     quiet = YES;
                     break;
@@ -234,27 +346,25 @@ int main(int argc, char* const argv[]) {
         DLOG(@"fps: %f", fps);
         DLOG(@"height: %ld", height);
         DLOG(@"codec: %@", codec);
-        DLOG(@"quality: %@", quality);
         DLOG(@"quiet: %s", (quiet ? "YES" : "NO"));
         DLOG(@"sort: %@ (%s)", sortAttribute, (reverseOrder ? "reversed" : "normal"));
 
         NSFileManager *fileManager = [NSFileManager defaultManager];
-        NSString *destPath = [[NSURL fileURLWithPath:[[NSString stringWithUTF8String:argv[argc - 1]]
-                                                      stringByExpandingTildeInPath]] path];
+        NSURL *destPath = [NSURL fileURLWithPath:[[NSString stringWithUTF8String:argv[argc - 1]] stringByExpandingTildeInPath]];
         DLOG(@"Destination Path: %@", destPath);
 
-        if (![destPath hasSuffix:@".mov"]) {
-            fprintf(stderr, "Error: Output filename must be of type '.mov'\n");
+        if (![destPath.pathExtension isEqualToString:@"mov"]) {
+            fprintf(stderr, "Error: Output filename must be of type '.mov' (is '%s')\n", destPath.pathExtension.UTF8String);
             return 1;
         }
 
-        if ([fileManager fileExistsAtPath:destPath]) {
+        if ([fileManager fileExistsAtPath:destPath.path]) {
             fprintf(stderr, "Error: Output file already exists.\n");
             return 1;
         }
 
         BOOL isDir;
-        if (!([fileManager fileExistsAtPath:[destPath stringByDeletingLastPathComponent]
+        if (!([fileManager fileExistsAtPath:[destPath.path stringByDeletingLastPathComponent]
                                 isDirectory:&isDir] && isDir)) {
             fprintf(stderr,
                     "Error: Output file is not writable. "
@@ -305,32 +415,25 @@ int main(int argc, char* const argv[]) {
         [imageFiles sortWithOptions:NSSortConcurrent usingComparator:sortComparators[sortAttribute]];
 
         NSError *err = nil;
-        QTMovie *movie = (dryrun ? nil : [[QTMovie alloc] initToWritableFile:destPath error:&err]);
+        AVAssetWriter *movie = (dryrun ? nil : [AVAssetWriter assetWriterWithURL:destPath fileType:AVFileTypeMPEG4 error:&err]);
+        AVAssetWriterInput *movieWriter;
+        const int32_t timeScale = INT32_MAX;
 
         if (!dryrun) {
-            if (movie == nil) {
-                fprintf(stderr, "Error: Unable to initialize QT object: %s.\nTry 'tlassemble --help' for more information.\n", err.localizedDescription.UTF8String);
+            if (!movie) {
+                fprintf(stderr, "Error: Unable to initialize AVAssetWriter: %s.\nTry 'tlassemble --help' for more information.\n", err.localizedDescription.UTF8String);
                 return 1;
             }
-
-            [movie setAttribute:@YES forKey:QTMovieEditableAttribute];
         }
 
-        NSDictionary *imageAttributes = @{ QTAddImageCodecType: codec,
-                                           QTAddImageCodecQuality: quality,
-                                           QTTrackTimeScaleAttribute: @100000 };
-
-        DLOG(@"%@",imageAttributes);
-
+        VTCompressionSessionRef compressionSession = NULL;
         NSDictionary *imageSourceOptions = @{ (__bridge NSString*)kCGImageSourceShouldAllowFloat: @YES };
 
-        const long timeScale = 100000;
-        const long long timeValue = (long long) ceil((double) timeScale / fps);
-        const QTTime duration = QTMakeTime(timeValue, timeScale);
+        const long long timeValue = llround((double)timeScale / fps);
         unsigned long fileIndex = 1;  // Human-readable, so 1-based.
         unsigned long framesFilteredOut = 0;
         unsigned long framesAddedSuccessfully = 0;
-        NSSize lastFrameSize = {0, 0};
+        NSSize frameSize = {0, 0};
 
         for (NSURL *file in imageFiles) {
             @autoreleasepool {
@@ -374,75 +477,155 @@ int main(int argc, char* const argv[]) {
                         }
 
                         if (!filteredOut) {
-                            CGImageRef rawImage = CGImageSourceCreateImageAtIndex(imageSource, 0, (__bridge CFDictionaryRef)imageSourceOptions);
+                            CGImageRef image = CGImageSourceCreateImageAtIndex(imageSource, 0, (__bridge CFDictionaryRef)imageSourceOptions);
 
-                            if (rawImage) {
-                                NSImage *image = [[NSImage alloc] initWithCGImage:rawImage size:NSZeroSize];
-
-                                if (image) {
-                                    if ((0 != lastFrameSize.width) && (0 != lastFrameSize.height)) {
-                                        if ((lastFrameSize.width != image.size.width) || (lastFrameSize.height != image.size.height)) {
-                                            fprintf(stderr,
-                                                    "Frame #%lu had the size %llu x %llu, but frame #%lu has size %llu x %llu.  The resulting movie will probably be deformed.\n",
-                                                    fileIndex - 1,
-                                                    (unsigned long long)lastFrameSize.width,
-                                                    (unsigned long long)lastFrameSize.height,
-                                                    fileIndex,
-                                                    (unsigned long long)image.size.width,
-                                                    (unsigned long long)image.size.height);
-                                        }
-                                    }
-                                    lastFrameSize = image.size;
-
-                                    const long width = (height
-                                                        ? height * (image.size.width / image.size.height)
-                                                        : image.size.width);
-
-                                    if (!height) {
-                                        height = image.size.height;
-                                    }
-
-                                    const unsigned long kSafeHeightLimit = 2512;
-                                    if (height > kSafeHeightLimit) {
-                                        static BOOL warnedOnce = NO;
-
-                                        if (!warnedOnce) {
-                                            fprintf(stderr, "Warning: movies with heights greater than %lu pixels are known to not work sometimes (the resulting movie file will be essentially empty).\n", kSafeHeightLimit);
-                                            warnedOnce = YES;
-                                        }
-                                    }
-
-                                    if (!dryrun) {
-                                        // Always "render" the image, even if not actually resizing, as this ensures formats like NEF work reliably (as otherwise there seems to be some intermitent glitching).
-                                        NSImage *renderedImage = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
-
-                                        if (renderedImage) {
-                                            [renderedImage lockFocus];
-                                            [image drawInRect:NSMakeRect(0.f, 0.f, width, height)
-                                                     fromRect:NSZeroRect
-                                                    operation:NSCompositeSourceOver fraction:1.f];
-                                            [renderedImage unlockFocus];
-
-                                            [movie addImage:renderedImage
-                                                forDuration:duration
-                                             withAttributes:imageAttributes];
-
-                                            ++framesAddedSuccessfully;
-
-                                            if (!quiet) {
-                                                printf("Processed %s (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
-                                            }
-                                        } else {
-                                            fprintf(stderr, "Unable to create render buffer for frame \"%s\" with size %ld x %ld (%lu of %lu)\n", file.path.UTF8String, width, height, fileIndex, imageFiles.count);
-                                        }
-                                    } else {
-                                        ++framesAddedSuccessfully;
+                            if (image) {
+                                if ((0 != frameSize.width) && (0 != frameSize.height)) {
+                                    if (    (frameSize.width != CGImageGetWidth(image))
+                                         || (frameSize.height != CGImageGetHeight(image))) {
+                                        fprintf(stderr,
+                                                "First frame (and thus output movie) has size %llu x %llu, but frame #%lu has size %zu x %zu.  The resulting movie may be deformed.\n",
+                                                (unsigned long long)frameSize.width,
+                                                (unsigned long long)frameSize.height,
+                                                fileIndex,
+                                                CGImageGetWidth(image),
+                                                CGImageGetHeight(image));
                                     }
                                 } else {
-                                    fprintf(stderr, "Unable to Cocoaify \"%s\" (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
+                                    frameSize = NSMakeSize(CGImageGetWidth(image), CGImageGetHeight(image));
                                 }
 
-                                CGImageRelease(rawImage);
+                                const long width = (height
+                                                    ? llround(height * ((double)CGImageGetWidth(image) / CGImageGetHeight(image)))
+                                                    : CGImageGetWidth(image));
+
+                                if (!height) {
+                                    height = CGImageGetHeight(image);
+                                }
+
+                                const unsigned long kSafeHeightLimit = 2496;
+                                if (height > kSafeHeightLimit) {
+                                    static BOOL warnedOnce = NO;
+
+                                    if (!warnedOnce) {
+                                        fprintf(stderr, "Warning: movies with heights greater than %lu pixels are known to not work (either they'll fail immediately with an error from the compression engine, or appear to work but the resulting movie file will be essentially empty).\n", kSafeHeightLimit); fflush(stderr);
+                                        warnedOnce = YES;
+                                    }
+                                }
+
+                                {
+                                    static BOOL haveLoggedDimensions = NO;
+                                    if (!haveLoggedDimensions) {
+                                        DLOG(@"Movie dimensions: %ld x %ld", width, height);
+                                        haveLoggedDimensions = YES;
+                                    }
+                                }
+
+                                CVPixelBufferRef pixelBuffer = CreatePixelBufferFromCGImage(image, NSMakeSize(width, height));
+
+                                if (pixelBuffer) {
+                                    if (!compressionSession) {
+                                        // Now that we have our exemplar frame, we can create the asset writer.  We have to wait until now to do this because the asset writer, in pass-through mode, needs to know some basic info about the compressed frames it'll be receiving (i.e. size for a start).
+
+                                        {
+                                            CMVideoFormatDescriptionRef videoFormatDescription = NULL;
+                                            OSStatus status = CMVideoFormatDescriptionCreate(kCFAllocatorDefault,
+                                                                                             kCMVideoCodecType_H264,
+                                                                                             width,
+                                                                                             height,
+                                                                                             NULL,
+                                                                                             &videoFormatDescription);
+
+                                            if (0 != status) {
+                                                fprintf(stderr, "Unable to create video format description hint, error #%d.\n", status);
+                                                return 1;
+                                            }
+
+                                            movieWriter = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo
+                                                                                             outputSettings:nil
+                                                                                           sourceFormatHint:videoFormatDescription];
+
+                                            CFRelease(videoFormatDescription);
+                                        }
+
+                                        if (!movieWriter) {
+                                            fprintf(stderr, "Error: Unable to initialize AVAssetWriterInput.\n");
+                                            return 1;
+                                        }
+
+                                        movieWriter.expectsMediaDataInRealTime = NO;
+
+                                        [movie addInput:movieWriter];
+
+                                        if (![movie startWriting]) {
+                                            fprintf(stderr, "Error: Unable to start writing movie file: %s\n", movie.error.localizedDescription.UTF8String);
+                                            return 1;
+                                        }
+                                        
+                                        [movie startSessionAtSourceTime:CMTimeMake(0, timeScale)];
+
+                                        // Now create the actual compression session to do the real work and output the result to the asset writer we just created.
+
+                                        OSStatus status = VTCompressionSessionCreate(NULL,
+                                                                                     width,
+                                                                                     height,
+                                                                                     kCMVideoCodecType_H264,
+                                                                                     NULL, // TODO: Investigate encoder specifications.
+                                                                                     NULL, // TODO: Consider using a pixel buffer pool.
+                                                                                     NULL,
+                                                                                     compressedFrameOutput,
+                                                                                     (__bridge void*)movieWriter,
+                                                                                     &compressionSession);
+
+                                        if (0 != status) {
+                                            fprintf(stderr, "Unable to create compression session, error #%d.\n", status);
+                                            return 1;
+                                        }
+
+                                        status = VTCompressionSessionPrepareToEncodeFrames(compressionSession);
+
+                                        if (0 != status) {
+                                            fprintf(stderr, "Unable to prepare compression session, error #%d.\n", status);
+                                            return 1;
+                                        }
+
+                                    }
+
+                                    OSStatus status = VTCompressionSessionEncodeFrame(compressionSession,
+                                                                                      pixelBuffer,
+                                                                                      CMTimeMake(framesAddedSuccessfully * timeValue, timeScale),
+                                                                                      kCMTimeInvalid,
+                                                                                      NULL, // TODO: Investigate per-frame properties.
+                                                                                      (void*)(framesAddedSuccessfully + 1),
+                                                                                      NULL); // TODO: Check if any of these flags are useful.
+                                    if (0 == status) {
+#if 1
+                                        if (compressionSession) {
+                                            status = VTCompressionSessionCompleteFrames(compressionSession, kCMTimePositiveInfinity);
+
+                                            if (0 != status) {
+                                                fprintf(stderr, "Warning: unable to complete compression session, error #%d.\n", status);
+                                                return 1;
+                                            }
+                                        }
+#endif
+
+                                        ++framesAddedSuccessfully;
+
+                                        if (!quiet) {
+                                            printf("Processed %s (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
+                                        }
+                                    } else {
+                                        fprintf(stderr, "Unable to compress frame from \"%s\" (%lu of %lu), error #%d.\n", file.path.UTF8String, fileIndex, imageFiles.count, status);
+                                    }
+
+                                    CVPixelBufferRelease(pixelBuffer);
+                                } else {
+                                    fprintf(stderr, "Unable to create pixel buffer from \"%s\" (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
+                                    return 1;
+                                }
+
+                                CGImageRelease(image);
                             } else {
                                 fprintf(stderr, "Unable to render \"%s\" (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
                             }
@@ -464,32 +647,53 @@ int main(int argc, char* const argv[]) {
             ++fileIndex;
         }
 
-        if (0 < framesAddedSuccessfully) {
-            if (!dryrun && ![movie updateMovieFile]) {
-                fprintf(stderr, "Unable to complete creation of movie (usually meaning QTKitServer just crashed due to a bug - sorry, not my fault).\n");
-                return -1;
-            } else {
-                if (framesAddedSuccessfully != imageFiles.count) {
-                    fprintf(stderr, "Warning: source folder contained %lu files but only %lu were readable as images (of which %lu were filtered out).\n", imageFiles.count, framesAddedSuccessfully, framesFilteredOut);
-                } else {
-                    if (dryrun) {
-                        printf("Would probably have successfully created \"%s\" out of %lu images (%lu others being filtered out, and %lu other files not being readable).\n",
-                               [destPath stringByAbbreviatingWithTildeInPath].UTF8String,
-                               framesAddedSuccessfully,
-                               framesFilteredOut,
-                               imageFiles.count - (framesAddedSuccessfully + framesFilteredOut));
-                    } else {
-                        if (!quiet) {
-                            printf("Successfully created %s out of %lu images (%lu others filtered out).\n",
-                                   [destPath stringByAbbreviatingWithTildeInPath].UTF8String,
-                                   framesAddedSuccessfully,
-                                   framesFilteredOut);
-                        }
-                    }
+#if 0
+        if (compressionSession) {
+            const OSStatus status = VTCompressionSessionCompleteFrames(compressionSession, kCMTimePositiveInfinity);
+
+            if (0 != status) {
+                fprintf(stderr, "Warning: unable to complete compression session, error #%d.\n", status);
+                return 1;
+            }
+        }
+#endif
+
+        if (movie) {
+            dispatch_semaphore_t barrier = dispatch_semaphore_create(0);
+
+            [movie finishWritingWithCompletionHandler:^{
+                if (AVAssetWriterStatusCompleted != movie.status) {
+                    fprintf(stderr, "Unable to complete movie: %s\n", movie.error.localizedDescription.UTF8String);
+                    exit(1);
                 }
 
-                return 0;
+                dispatch_semaphore_signal(barrier);
+            }];
+
+            dispatch_semaphore_wait(barrier, DISPATCH_TIME_FOREVER);
+        }
+
+        if (0 < framesAddedSuccessfully) {
+            if (framesAddedSuccessfully != imageFiles.count) {
+                fprintf(stderr, "Warning: source folder contained %lu files but only %lu were readable as images (of which %lu were filtered out).\n", imageFiles.count, framesAddedSuccessfully, framesFilteredOut);
+            } else {
+                if (dryrun) {
+                    printf("Would probably have successfully created \"%s\" out of %lu images (%lu others being filtered out, and %lu other files not being readable).\n",
+                           [destPath.path stringByAbbreviatingWithTildeInPath].UTF8String,
+                           framesAddedSuccessfully,
+                           framesFilteredOut,
+                           imageFiles.count - (framesAddedSuccessfully + framesFilteredOut));
+                } else {
+                    if (!quiet) {
+                        printf("Successfully created %s out of %lu images (%lu others filtered out).\n",
+                               [destPath.path stringByAbbreviatingWithTildeInPath].UTF8String,
+                               framesAddedSuccessfully,
+                               framesFilteredOut);
+                    }
+                }
             }
+
+            return 0;
         } else {
             fprintf(stderr, "None of the %lu input files were readable as images.\n", imageFiles.count);
             return -1;

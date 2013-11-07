@@ -4,9 +4,16 @@ SRC = $(TARGET).m
 
 #-------Compiler Flags-------#
 CFLAGS = -mmacosx-version-min=10.6 -fobjc-arc -pedantic -Wno-gnu
-CFLAGS += -framework Foundation
+CFLAGS += -framework ApplicationServices # To prevent a stupid runtime error re. framework versions.
 CFLAGS += -framework AppKit
-CFLAGS += -framework QTKit
+CFLAGS += -framework AVFoundation
+CFLAGS += -framework CoreFoundation
+CFLAGS += -framework CoreGraphics
+CFLAGS += -framework CoreMedia
+CFLAGS += -framework CoreVideo
+CFLAGS += -framework Foundation
+CFLAGS += -framework ImageIO
+CFLAGS += -framework VideoToolbox
 
 DEBUG = -D DEBUG
 
