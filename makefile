@@ -3,7 +3,7 @@ TARGET = tlassemble
 SRC = $(TARGET).m
 
 #-------Compiler Flags-------#
-CFLAGS = -mmacosx-version-min=10.6 -fobjc-arc -pedantic -Wno-gnu
+CFLAGS = -mmacosx-version-min=10.8 -fobjc-arc -pedantic -Wno-gnu
 CFLAGS += -framework ApplicationServices # To prevent a stupid runtime error re. framework versions.
 CFLAGS += -framework AppKit
 CFLAGS += -framework AVFoundation
