@@ -46,6 +46,7 @@
 #import <Foundation/Foundation.h>
 #import <ImageIO/ImageIO.h>
 #import <VideoToolbox/VideoToolbox.h>
+#import <VideoToolbox/VTVideoEncoderList.h>
 
 
 static const char* DescriptionOfCVReturn(CVReturn status) {
@@ -173,35 +174,172 @@ static void compressedFrameOutput(void *untypedAssetWriter,
     }
 }
 
+#ifndef countof
+#define countof(_x_) (sizeof(_x_) / sizeof(*_x_))
+#endif
+
+static BOOL applyTimeSuffix(double *value, const char *suffix, BOOL invert) {
+    const struct {
+        char suffix[3];
+        double multiplier;
+    } suffixes[] = {
+        {"w", 604800.0},
+        {"d", 86400.0},
+        {"h", 3600.0},
+        {"m", 60.0},
+        {"s", 1.0},
+        {"ms", 0.001},
+        {"us", 0.000001},
+        {"µs", 0.000001},
+        {"ns", 0.000000001},
+        {"ps", 0.000000000001},
+    };
+
+    for (int i = 0; i < countof(suffixes); ++i) {
+        if (0 == strcmp(suffix, suffixes[i].suffix)) {
+            if (invert) {
+                *value /= suffixes[i].multiplier;
+            } else {
+                *value *= suffixes[i].multiplier;
+            }
+
+            return YES;
+        }
+    }
+
+    return NO;
+}
+
+static BOOL applyBitSuffix(double *value, const char *suffix) {
+    const char kModifiers[] = "KMGTPEZY";
+    const char *modifier = (('k' == suffix[0]) ? kModifiers : strchr(kModifiers, suffix[0]));
+
+    if (modifier) {
+        const uintptr_t factor = (uintptr_t)modifier - (uintptr_t)kModifiers + 1;
+        const BOOL baseTwo = ('i' == suffix[1]);
+
+        *value *= (baseTwo ? exp2(factor * 10) : __exp10(factor * 3));
+        ++suffix;
+
+        if (baseTwo) {
+            ++suffix;
+        }
+    }
+
+    switch (suffix[0]) {
+        case 'b':
+            // Do nothing.
+            break;
+        case 'B':
+            *value *= 8;
+            break;
+        case 0:
+            // Do nothing.
+            break;
+        default:
+            return NO;
+    }
+
+    return YES;
+}
+
+static BOOL applyBitRateSuffix(double *value, const char *suffix) {
+    char *divider = strchr(suffix, '/');
+
+    if (divider) {
+        char *bytePortion = strndup(suffix, divider - suffix);
+        assert(bytePortion);
+
+        BOOL allGood = applyBitSuffix(value, bytePortion);
+        free(bytePortion);
+
+        if (allGood) {
+            return applyTimeSuffix(value, divider + 1, YES);
+        } else {
+            return NO;
+        }
+    } else {
+        return applyBitSuffix(value, suffix);
+    }
+}
+
+static BOOL determineBitsPerTimeInterval(double *bits, double *timeInterval, const char *suffix) {
+    char *divider = strchr(suffix, '/');
+
+    if (divider) {
+        char *bytePortion = strndup(suffix, divider - suffix);
+        assert(bytePortion);
+
+        BOOL allGood = applyBitSuffix(bits, bytePortion);
+        free(bytePortion);
+
+        if (allGood) {
+            char *end = NULL;
+            double timeScalar = strtod(divider + 1, &end);
+
+            if (end) {
+                if (end == divider + 1) {
+                    timeScalar = 1;
+                }
+
+                *timeInterval *= timeScalar;
+
+                if (*end) {
+                    return applyTimeSuffix(timeInterval, end, YES);
+                } else {
+                    return YES;
+                }
+            } else {
+                return NO;
+            }
+        } else {
+            return NO;
+        }
+    } else {
+        return applyBitSuffix(bits, suffix);
+    }
+}
+
 int main(int argc, char* const argv[]) {
     @autoreleasepool {
         static const struct option longOptions[] = {
-            {"codec",   required_argument,  NULL, 1},
-            {"dryrun",  no_argument,        NULL, 10},
-            {"filter",  required_argument,  NULL, 9},
-            {"fps",     required_argument,  NULL, 2},
-            {"height",  required_argument,  NULL, 3},
-            {"help",    no_argument,        NULL, 4},
-            //{"quality", required_argument,  NULL, 5},
-            {"quiet",   no_argument,        NULL, 6},
-            {"reverse", no_argument,        NULL, 7},
-            {"sort",    required_argument,  NULL, 8},
-            {NULL,      0,                  NULL, 0}
+            {"assume-preceding-frames",     no_argument,        NULL, 16},
+            {"assume-succeeding-frames",    no_argument,        NULL, 17},
+            {"average-bit-rate",            required_argument,  NULL, 14},
+            {"codec",                       required_argument,  NULL,  1},
+            {"dryrun",                      no_argument,        NULL, 10},
+            {"entropy-mode",                required_argument,  NULL, 18},
+            {"file-type",                   required_argument,  NULL, 20},
+            {"filter",                      required_argument,  NULL,  9},
+            {"fps",                         required_argument,  NULL,  2},
+            {"height",                      required_argument,  NULL,  3},
+            {"help",                        no_argument,        NULL,  4},
+            {"key-frames-only",             no_argument,        NULL, 12},
+            {"max-frame-delay",             required_argument,  NULL, 19},
+            {"max-key-frame-period",        required_argument,  NULL, 11},
+            {"quality",                     required_argument,  NULL,  5},
+            {"quiet",                       no_argument,        NULL,  6},
+            {"rate-limit",                  required_argument,  NULL, 15},
+            {"reverse",                     no_argument,        NULL,  7},
+            {"sort",                        required_argument,  NULL,  8},
+            {"strict-frame-ordering",       no_argument,        NULL, 13},
+            {NULL,                          0,                  NULL,  0}
         };
+
+        NSMutableDictionary *compressionSettings = [NSMutableDictionary dictionary];
+        compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_RealTime] = @(NO);
+        compressionSettings[(__bridge NSString*)kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder] = @(YES);
 
         double fps = 30.0;
         long height = 0;
-        NSString *codec = @"avc1";
+        CMVideoCodecType codec = 'avc1';
+        NSString *encoderID;
+        NSString *fileType;
         BOOL quiet = NO;
         BOOL reverseOrder = NO;
         NSString *sortAttribute = @"creation";
         NSMutableDictionary *filter = [NSMutableDictionary dictionary];
         BOOL dryrun = NO;
-
-        NSDictionary *codecCodes = @{ @"h264": @"avc1",
-                                      @"mpv4": @"mpv4",
-                                      @"photojpeg" : @"jpeg",
-                                      @"raw": @"raw " };
 
         NSDictionary *sortComparators = @{
             @"name": ^(NSURL *a, NSURL *b) {
@@ -233,36 +371,66 @@ int main(int argc, char* const argv[]) {
         int optionIndex = 0;
         while (-1 != (optionIndex = getopt_long(argc, argv, "", longOptions, NULL))) {
             switch (optionIndex) {
-                case 1:
-                    codec = codecCodes[@(optarg)];
-                    if (!codec) {
-                        fprintf(stderr, "Unsupported codec \"%s\".  Supported codecs are:", optarg);
+                case 1: {
+                    CFArrayRef supportedVideoEncoders = NULL;
+                    const OSStatus status = VTCopyVideoEncoderList(NULL, &supportedVideoEncoders);
 
-                        for (NSString *code in codecCodes) {
-                            fprintf(stderr, " %s", code.UTF8String);
+                    if (0 != status) {
+                        fprintf(stderr, "Unable to determine the supported video codecs, error #%d.\n", status);
+                        return 1;
+                    }
+
+                    NSMutableDictionary *codecMap = [NSMutableDictionary dictionary];
+                    NSMutableDictionary *encoderMap = [NSMutableDictionary dictionary];
+
+                    for (NSDictionary *codecSpec in CFBridgingRelease(supportedVideoEncoders)) {
+                        NSString *codecName = codecSpec[(__bridge NSString*)kVTVideoEncoderList_DisplayName];
+
+                        if (codecMap[codecName]) {
+                            fprintf(stderr, "Warning: found two encoders with the same name - \"%s\".\n", codecName.UTF8String);
+                        }
+
+                        codecMap[codecName] = codecSpec[(__bridge NSString*)kVTVideoEncoderList_CodecType];
+                        encoderMap[codecName] = codecSpec[(__bridge NSString*)kVTVideoEncoderList_EncoderID];
+                    }
+
+                    codec = ((NSNumber*)codecMap[@(optarg)]).intValue;
+                    encoderID = encoderMap[@(optarg)];
+
+                    if (!codec || !encoderID) {
+                        fprintf(stderr, "Unrecognised codec \"%s\".  Supported codecs are:", optarg);
+
+                        for (NSString *code in [codecMap.allKeys sortedArrayUsingSelector:@selector(caseInsensitiveCompare:)]) {
+                            fprintf(stderr, "\n  %s", code.UTF8String);
                         }
 
                         fprintf(stderr, "\n");
 
                         return EINVAL;
                     }
+
                     break;
+                }
                 case '2': {
                     char *end = NULL;
                     fps = strtod(optarg, &end);
-                    if (!end || *end || (0 >= fps)) {
+
+                    if (!end || (end == optarg) || *end || (0 >= fps)) {
                         fprintf(stderr, "Invalid argument \"%s\" to --fps.  Should be a non-zero, positive real value (e.g. 24.0, 29.97, etc).\n", optarg);
                         return EINVAL;
                     }
+
                     break;
                 }
                 case 3: {
                     char *end = NULL;
                     height = strtol(optarg, &end, 0);
-                    if (!end || *end || (0 >= height)) {
+
+                    if (!end || (end == optarg) || *end || (0 >= height)) {
                         fprintf(stderr, "Invalid argument \"%s\" to --height.  Should be a non-zero, positive integer.\n", optarg);
                         return EINVAL;
                     }
+
                     break;
                 }
                 case 4:
@@ -292,6 +460,19 @@ int main(int argc, char* const argv[]) {
                            "There isn't one.  This software is provided in the hope that it will be useful, but without any warranty, without even the implied warranty for merchantability or fitness for a particular purpose.  The software is provided as-is and its authors are not to be held responsible for any harm that may result from its use, including (but not limited to) data loss or corruption.\n",
                            argv[0], argv[0], argv[0], argv[0]);
                     return 0;
+                case 5: {
+                    char *end = NULL;
+                    const double quality = strtod(optarg, &end);
+
+                    if (end && (end != optarg) && !*end && (0.0 <= quality) && (1.0 >= quality)) {
+                        compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_Quality] = @(quality);
+                    } else {
+                        fprintf(stderr, "Invalid --quality argument \"%s\" - expect a floating-point value between 0.0 and 1.0 (inclusive).\n", optarg);
+                        return EINVAL;
+                    }
+
+                    break;
+                }
                 case 6:
                     quiet = YES;
                     break;
@@ -300,6 +481,7 @@ int main(int argc, char* const argv[]) {
                     break;
                 case 8:
                     sortAttribute = @(optarg);
+
                     if (!sortComparators[sortAttribute]) {
                         fprintf(stderr, "Unsupported sort method \"%s\".  Supported methods are:", optarg);
 
@@ -311,6 +493,7 @@ int main(int argc, char* const argv[]) {
 
                         return EINVAL;
                     }
+
                     break;
                 case 9: {
                     NSArray *pair = [@(optarg) componentsSeparatedByString:@"="];
@@ -328,6 +511,126 @@ int main(int argc, char* const argv[]) {
                 case 10:
                     dryrun = YES;
                     break;
+                case 11: {
+                    BOOL allGood = NO;
+                    char *end = NULL;
+                    double max = strtod(optarg, &end);
+
+                    if (end && (end != optarg)) {
+                        if (*end) {
+                            if (applyTimeSuffix(&max, end, NO)) {
+                                compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration] = @(max);
+                                allGood = YES;
+                            }
+                        } else {
+                            compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_MaxKeyFrameInterval] = @(lround(max));
+                            allGood = YES;
+                        }
+                    }
+
+                    if (!allGood) {
+                        fprintf(stderr, "Invalid parameter \"%s\" to --max_key_frame_period.  Expected an integer number of frames or a float-pointing unit of time with appropriate suffix (e.g. 's', 'ms', etc).\n", optarg);
+                        return EINVAL;
+                    }
+
+                    break;
+                }
+                case 12:
+                    compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_AllowTemporalCompression] = @(NO);
+                    break;
+                case 13:
+                    compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_AllowFrameReordering] = @(NO);
+                    break;
+                case 14: {
+                    char *end = NULL;
+                    double averageBitRate = strtod(optarg, &end);
+                    BOOL allGood = NO;
+
+                    if (end && (end != optarg)) {
+                        if (*end) {
+                            if (applyBitRateSuffix(&averageBitRate, end)) {
+                                allGood = YES;
+                            }
+                        } else {
+                            allGood = YES;
+                        }
+                    }
+
+                    if (allGood) {
+                        compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_AverageBitRate] = @(averageBitRate);
+                    } else {
+                        fprintf(stderr, "Invalid --average-bit-rate argument \"%s\" - expected a float-point number optionally followed by units (e.g. 'Mb' [implied per second] or 'kB/ms' etc).\n", optarg);
+                        return EINVAL;
+                    }
+
+                    break;
+                }
+                case 15: {
+                    char *end = NULL;
+                    double rateLimit = strtod(optarg, &end);
+                    double interval = 1;
+                    BOOL allGood = NO;
+
+                    if (end && (end != optarg)) {
+                        if (*end) {
+                            if (determineBitsPerTimeInterval(&rateLimit, &interval, end)) {
+                                allGood = YES;
+                            }
+                        } else {
+                            allGood = YES;
+                        }
+                    }
+
+                    if (allGood) {
+                        if (!compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_DataRateLimits]) {
+                            compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_DataRateLimits] = [NSMutableArray array];
+                        }
+
+                        [compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_DataRateLimits] addObject:@(rateLimit)];
+                        [compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_DataRateLimits] addObject:@(interval)];
+                    } else {
+                        fprintf(stderr, "Invalid --rate-limit argument \"%s\" - expected a float-point number optionally followed by units (e.g. 'Mb' [implied per second] or 'kB/ms' or 'b/10s' etc).\n", optarg);
+                        return EINVAL;
+                    }
+                    
+                    break;
+                }
+                case 16:
+                    compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_MoreFramesBeforeStart] = @(YES);
+                    break;
+                case 17:
+                    compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_MoreFramesAfterEnd] = @(YES);
+                    break;
+                case 18: {
+                    NSDictionary *entropyModes = @{@"cavlc": (__bridge NSString*)kVTH264EntropyMode_CAVLC,
+                                                   @"cabac": (__bridge NSString*)kVTH264EntropyMode_CABAC};
+                    NSString *mode = entropyModes[[@(optarg) lowercaseString]];
+
+                    if (mode) {
+                        compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_H264EntropyMode] = mode;
+                    } else {
+                        fprintf(stderr, "Unrecognised entropy mode \"%s\".\n", optarg);
+                        return EINVAL;
+                    }
+
+                    break;
+                }
+                case 19: {
+                    char *end = NULL;
+                    const unsigned long long maxFrameDelay = strtoull(optarg, &end, 0);
+
+                    if (end && (end != optarg) && !*end) {
+                        compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_MaxFrameDelayCount] = @(maxFrameDelay);
+                    } else {
+                        fprintf(stderr, "Invalid --max-frame-delay argument \"%s\" - expect a positive integer (or zero).\n", optarg);
+                        return EINVAL;
+                    }
+
+                    break;
+                }
+                case 20:
+                    fileType = @(optarg);
+                    break;
                 default:
                     fprintf(stderr, "Invalid arguments (%d).\n", optionIndex);
                     return EINVAL;
@@ -342,20 +645,32 @@ int main(int argc, char* const argv[]) {
             return EINVAL;
         }
 
+        compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_ExpectedFrameRate] = @(fps);
+
         DLOG(@"filter: %@", filter);
         DLOG(@"fps: %f", fps);
         DLOG(@"height: %ld", height);
-        DLOG(@"codec: %@", codec);
         DLOG(@"quiet: %s", (quiet ? "YES" : "NO"));
         DLOG(@"sort: %@ (%s)", sortAttribute, (reverseOrder ? "reversed" : "normal"));
 
         NSFileManager *fileManager = [NSFileManager defaultManager];
-        NSURL *destPath = [NSURL fileURLWithPath:[[NSString stringWithUTF8String:argv[argc - 1]] stringByExpandingTildeInPath]];
+        NSURL *destPath = [NSURL fileURLWithPath:[@(argv[argc - 1]) stringByExpandingTildeInPath]];
         DLOG(@"Destination Path: %@", destPath);
 
-        if (![destPath.pathExtension isEqualToString:@"mov"]) {
-            fprintf(stderr, "Error: Output filename must be of type '.mov' (is '%s')\n", destPath.pathExtension.UTF8String);
-            return 1;
+        if (!fileType) {
+            NSString *fileExtension = destPath.pathExtension.lowercaseString;
+
+            if (fileExtension) {
+                NSDictionary *fileTypeFromExtension = @{@"mov": AVFileTypeQuickTimeMovie,
+                                                        @"mp4": AVFileTypeMPEG4,
+                                                        @"m4v": AVFileTypeAppleM4V};
+
+                fileType = fileTypeFromExtension[fileExtension];
+            }
+
+            if (!fileType) {
+                fileType = AVFileTypeQuickTimeMovie;
+            }
         }
 
         if ([fileManager fileExistsAtPath:destPath.path]) {
@@ -375,7 +690,7 @@ int main(int argc, char* const argv[]) {
         NSMutableArray *imageFiles = [NSMutableArray array];
 
         for (int i = 0; i < argc - 1; ++i) {
-            NSURL *inputPath = [NSURL fileURLWithPath:[[NSString stringWithUTF8String:argv[i]] stringByExpandingTildeInPath]];
+            NSURL *inputPath = [NSURL fileURLWithPath:[@(argv[i]) stringByExpandingTildeInPath]];
 
             DLOG(@"Input Path: %@", inputPath);
 
@@ -415,7 +730,7 @@ int main(int argc, char* const argv[]) {
         [imageFiles sortWithOptions:NSSortConcurrent usingComparator:sortComparators[sortAttribute]];
 
         NSError *err = nil;
-        AVAssetWriter *movie = (dryrun ? nil : [AVAssetWriter assetWriterWithURL:destPath fileType:AVFileTypeMPEG4 error:&err]);
+        AVAssetWriter *movie = (dryrun ? nil : [AVAssetWriter assetWriterWithURL:destPath fileType:fileType error:&err]);
         AVAssetWriterInput *movieWriter;
         const int32_t timeScale = INT32_MAX;
 
@@ -530,7 +845,7 @@ int main(int argc, char* const argv[]) {
                                         {
                                             CMVideoFormatDescriptionRef videoFormatDescription = NULL;
                                             OSStatus status = CMVideoFormatDescriptionCreate(kCFAllocatorDefault,
-                                                                                             kCMVideoCodecType_H264,
+                                                                                             codec,
                                                                                              width,
                                                                                              height,
                                                                                              NULL,
@@ -569,16 +884,48 @@ int main(int argc, char* const argv[]) {
                                         OSStatus status = VTCompressionSessionCreate(NULL,
                                                                                      width,
                                                                                      height,
-                                                                                     kCMVideoCodecType_H264,
-                                                                                     NULL, // TODO: Investigate encoder specifications.
-                                                                                     NULL, // TODO: Consider using a pixel buffer pool.
+                                                                                     codec,
+                                                                                     (encoderID
+                                                                                      ? (__bridge CFDictionaryRef)@{(__bridge NSString*)kVTVideoEncoderSpecification_EncoderID: encoderID}
+                                                                                      : nil),
+                                                                                     NULL, // TODO: Consider pre-defining a pixel buffer pool.  Though is this done automatically if we don't do it explicitly?
                                                                                      NULL,
                                                                                      compressedFrameOutput,
                                                                                      (__bridge void*)movieWriter,
                                                                                      &compressionSession);
-
+                                        
                                         if (0 != status) {
                                             fprintf(stderr, "Unable to create compression session, error #%d.\n", status);
+                                            return 1;
+                                        }
+
+                                        CFDictionaryRef supportedPropertyInfo = NULL;
+                                        status = VTSessionCopySupportedPropertyDictionary(compressionSession, &supportedPropertyInfo);
+
+                                        if (0 != status) {
+                                            fprintf(stderr, "Warning: Unable to determine supported compression properties, error #%d.  Will try setting them blindly, but this is likely to fail.\n", status);
+                                        }
+
+                                        NSSet *supportedProperties = [NSSet setWithArray:((NSDictionary*)CFBridgingRelease(supportedPropertyInfo)).allKeys];
+                                        NSSet *specifiedProperties = [NSSet setWithArray:compressionSettings.allKeys];
+
+                                        if (![specifiedProperties isSubsetOfSet:supportedProperties]) {
+                                            NSMutableSet *unsupportedProperties = specifiedProperties.mutableCopy;
+                                            [unsupportedProperties minusSet:supportedProperties];
+
+                                            fprintf(stderr, "Warning: the following compression properties are not supported in this configuration, and will be ignored:\n");
+
+                                            for (NSString *property in unsupportedProperties) {
+                                                fprintf(stderr, "  %s\n", property.UTF8String);
+                                                [compressionSettings removeObjectForKey:property];
+                                            }
+                                        }
+
+
+                                        status = VTSessionSetProperties(compressionSession, (__bridge CFDictionaryRef)compressionSettings);
+
+                                        if (0 != status) {
+                                            fprintf(stderr, "Unable to set compression properties, error #%d, to:\n%s\n", status, compressionSettings.description.UTF8String);
                                             return 1;
                                         }
 
