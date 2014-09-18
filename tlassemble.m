@@ -327,8 +327,6 @@ int main(int argc, char* const argv[]) {
         };
 
         NSMutableDictionary *compressionSettings = [NSMutableDictionary dictionary];
-        compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_RealTime] = @(NO);
-        compressionSettings[(__bridge NSString*)kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder] = @(YES);
 
         double fps = 30.0;
         long height = 0;
@@ -645,8 +643,6 @@ int main(int argc, char* const argv[]) {
             return EINVAL;
         }
 
-        compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_ExpectedFrameRate] = @(fps);
-
         DLOG(@"filter: %@", filter);
         DLOG(@"fps: %f", fps);
         DLOG(@"height: %ld", height);
@@ -906,6 +902,8 @@ int main(int argc, char* const argv[]) {
                                             fprintf(stderr, "Warning: Unable to determine supported compression properties, error #%d.  Will try setting them blindly, but this is likely to fail.\n", status);
                                         }
 
+                                        DLOG(@"Tweakable compression settings: %@", supportedPropertyInfo);
+
                                         NSSet *supportedProperties = [NSSet setWithArray:((NSDictionary*)CFBridgingRelease(supportedPropertyInfo)).allKeys];
                                         NSSet *specifiedProperties = [NSSet setWithArray:compressionSettings.allKeys];
 
@@ -921,6 +919,21 @@ int main(int argc, char* const argv[]) {
                                             }
                                         }
 
+                                        // Use of a H.264-specific default profile setting is questionable, but at time of writing it appears that the H.264 codec is the only one that supports that property anyway, so it doesn't actually cause any practical problems.
+                                        NSDictionary *defaultCompressionSettings = @{(__bridge NSString*)kVTCompressionPropertyKey_RealTime: @(NO),
+                                                                                     (__bridge NSString*)kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: @(YES),
+                                                                                     (__bridge NSString*)kVTCompressionPropertyKey_ExpectedFrameRate: @(fps),
+                                                                                     (__bridge NSString*)kVTCompressionPropertyKey_H264EntropyMode: (__bridge NSString*)kVTH264EntropyMode_CABAC,
+                                                                                     (__bridge NSString*)kVTCompressionPropertyKey_ProfileLevel: (__bridge NSString*)kVTProfileLevel_H264_High_AutoLevel,
+                                                                                     (__bridge NSString*)kVTCompressionPropertyKey_ExpectedDuration: @(imageFiles.count / fps)};
+
+                                        NSMutableSet *applicableDefaultPropertyKeys = [NSMutableSet setWithArray:defaultCompressionSettings.allKeys];
+                                        [applicableDefaultPropertyKeys minusSet:specifiedProperties];
+                                        [applicableDefaultPropertyKeys intersectSet:supportedProperties];
+
+                                        for (NSString *key in applicableDefaultPropertyKeys) {
+                                            compressionSettings[key] = defaultCompressionSettings[key];
+                                        }
 
                                         status = VTSessionSetProperties(compressionSession, (__bridge CFDictionaryRef)compressionSettings);
 
@@ -928,6 +941,8 @@ int main(int argc, char* const argv[]) {
                                             fprintf(stderr, "Unable to set compression properties, error #%d, to:\n%s\n", status, compressionSettings.description.UTF8String);
                                             return 1;
                                         }
+
+                                        DLOG(@"Applied compression settings: %@", compressionSettings);
 
                                         status = VTCompressionSessionPrepareToEncodeFrames(compressionSession);
 
