@@ -624,7 +624,7 @@ int main(int argc, char* const argv[]) {
                     }
 
                     if (!allGood) {
-                        fprintf(stderr, "Invalid parameter \"%s\" to --max_key_frame_period.  Expected an integer number of frames or a float-pointing unit of time with appropriate suffix (e.g. 's', 'ms', etc).\n", optarg);
+                        fprintf(stderr, "Invalid parameter \"%s\" to --max_key_frame_period.  Expected an integer number of frames or a floating-point unit of time with appropriate suffix (e.g. 's', 'ms', etc).\n", optarg);
                         return EINVAL;
                     }
 
@@ -654,7 +654,7 @@ int main(int argc, char* const argv[]) {
                     if (allGood) {
                         compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_AverageBitRate] = @(averageBitRate);
                     } else {
-                        fprintf(stderr, "Invalid --average-bit-rate argument \"%s\" - expected a float-point number optionally followed by units (e.g. 'Mb' [implied per second] or 'kB/ms' etc).\n", optarg);
+                        fprintf(stderr, "Invalid --average-bit-rate argument \"%s\" - expected a floating-point number optionally followed by units (e.g. 'Mb' [implied per second] or 'kB/ms' etc).\n", optarg);
                         return EINVAL;
                     }
 
@@ -684,7 +684,7 @@ int main(int argc, char* const argv[]) {
                         [compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_DataRateLimits] addObject:@(rateLimit)];
                         [compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_DataRateLimits] addObject:@(interval)];
                     } else {
-                        fprintf(stderr, "Invalid --rate-limit argument \"%s\" - expected a float-point number optionally followed by units (e.g. 'Mb' [implied per second] or 'kB/ms' or 'b/10s' etc).\n", optarg);
+                        fprintf(stderr, "Invalid --rate-limit argument \"%s\" - expected a floating-point number optionally followed by units (e.g. 'Mb' [implied per second] or 'kB/ms' or 'b/10s' etc).\n", optarg);
                         return EINVAL;
                     }
                     
