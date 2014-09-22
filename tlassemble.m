@@ -49,6 +49,9 @@
 #import <VideoToolbox/VTVideoEncoderList.h>
 
 
+static const double kDefaultFPS = 30;
+
+
 static const char* DescriptionOfCVReturn(CVReturn status) {
     switch (status) {
         case kCVReturnError:
@@ -152,7 +155,30 @@ static CVPixelBufferRef CreatePixelBufferFromCGImage(CGImageRef image, NSSize fr
     return pixelBuffer;
 }
 
-static void compressedFrameOutput(void *untypedAssetWriter,
+const char* NameOfAVAssetWriterStatus(AVAssetWriterStatus status) {
+    switch (status) {
+        case AVAssetWriterStatusUnknown:
+            return "Unknown";
+        case AVAssetWriterStatusWriting:
+            return "Writing";
+        case AVAssetWriterStatusCompleted:
+            return "Completed";
+        case AVAssetWriterStatusFailed:
+            return "Failed";
+        case AVAssetWriterStatusCancelled:
+            return "Cancelled";
+        default:
+            return "Especially unknown";
+    }
+}
+
+typedef struct {
+    AVAssetWriter* __unsafe_unretained assetWriter;
+    AVAssetWriterInput* __unsafe_unretained assetWriterInput;
+    BOOL quiet;
+} FrameOutputContext;
+
+static void compressedFrameOutput(void *rawContext,
                                   void *frameNumber,
                                   OSStatus status,
                                   VTEncodeInfoFlags infoFlags,
@@ -162,14 +188,22 @@ static void compressedFrameOutput(void *untypedAssetWriter,
         exit(1);
     }
 
-    AVAssetWriterInput *assetWriter = (__bridge AVAssetWriterInput*)untypedAssetWriter;
+    FrameOutputContext *context = (FrameOutputContext*)rawContext;
 
-    if (assetWriter) {
-        if ([assetWriter appendSampleBuffer:sampleBuffer]) {
-            printf("Completed frame #%"PRIuPTR".\n", (uintptr_t)frameNumber);
-        } else {
-            fprintf(stderr, "Unable to append compressed frame #%"PRIuPTR" to file.\n", (uintptr_t)frameNumber);
-            exit(1);
+    if (context) {
+        if (context->assetWriterInput) {
+            if ([context->assetWriterInput appendSampleBuffer:sampleBuffer]) {
+                if (!context->quiet) {
+                    printf("Completed frame #%"PRIuPTR".\n", (uintptr_t)frameNumber);
+                }
+            } else {
+                fprintf(stderr,
+                        "Unable to append compressed frame #%"PRIuPTR" to file, status = %s (%s).\n",
+                        (uintptr_t)frameNumber,
+                        NameOfAVAssetWriterStatus(context->assetWriter.status),
+                        context->assetWriter.error.description.UTF8String);
+                exit(1);
+            }
         }
     }
 }
@@ -300,6 +334,65 @@ static BOOL determineBitsPerTimeInterval(double *bits, double *timeInterval, con
     }
 }
 
+void prescanFile(NSURL *file, const double speed, NSDate **earliestFrame, NSDate **latestFrame, NSMutableDictionary *fileCreationDates, NSMutableArray *imageFiles) {
+    BOOL fileLooksGood = YES;
+
+    if (0 < speed) {
+        // Unfortunately the file system's idea of creation date is often not very precise, nor accurate - some cameras (e.g. D7100) can end up creating files roughly simultaneously, despite the images of course being sequential (presumably as some kind of batching optimisation when emptying the in-camera image buffer).  So we try to get the actual recording time of the image out of the EXIF metadata, and only fall back to the file's creation date as a last resort.
+
+        id creationDate;
+        NSError *err;
+
+        NSDictionary *imageSourceOptions = @{ (__bridge NSString*)kCGImageSourceShouldAllowFloat: @YES,
+                                              (__bridge NSString*)kCGImageSourceShouldCache: @NO,
+                                              (__bridge NSString*)kCGImageSourceCreateThumbnailFromImageIfAbsent: @NO,
+                                              (__bridge NSString*)kCGImageSourceCreateThumbnailFromImageAlways: @NO };
+
+        CGImageSourceRef imageSource = CGImageSourceCreateWithURL((__bridge CFURLRef)file, (__bridge CFDictionaryRef)imageSourceOptions);
+
+        if (imageSource) {
+            NSDictionary *imageProperties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(imageSource, 0, (__bridge CFDictionaryRef)imageSourceOptions));
+
+            if (imageProperties) {
+                NSDictionary *exifProperties = imageProperties[(__bridge NSString*)kCGImagePropertyExifDictionary];
+
+                if (exifProperties) {
+                    NSString *dateAsString = exifProperties[(__bridge NSString*)kCGImagePropertyExifDateTimeOriginal];
+                    DLOG(@"Raw creation date for \"%@\": %@", file.path, dateAsString);
+                    creationDate = [NSDate dateWithNaturalLanguageString:dateAsString];
+                }
+            } else {
+                fprintf(stderr, "Unable to get image metadata for \"%s\".\n", file.path.UTF8String);
+                fileLooksGood = NO;
+            }
+
+            CFRelease(imageSource);
+        } else {
+            fprintf(stderr, "Unable to create an image source for \"%s\".\n", file.path.UTF8String);
+            fileLooksGood = NO;
+        }
+
+        if (!creationDate) {
+            if (![file getResourceValue:&creationDate forKey:NSURLCreationDateKey error:&err]) {
+                fprintf(stderr, "Unable to determine the creation date of \"%s\".\n", file.path.UTF8String);
+                fileLooksGood = NO;
+            }
+        }
+
+        if (creationDate) {
+            DLOG(@"Creation date of \"%@\": %@", file.path, creationDate);
+            fileCreationDates[file] = creationDate;
+
+            *earliestFrame = (*earliestFrame ? [*earliestFrame earlierDate:creationDate] : creationDate);
+            *latestFrame = (*latestFrame ? [*latestFrame laterDate:creationDate] : creationDate);
+        }
+    }
+
+    if (fileLooksGood) {
+        [imageFiles addObject:file];
+    }
+}
+
 int main(int argc, char* const argv[]) {
     @autoreleasepool {
         static const struct option longOptions[] = {
@@ -312,6 +405,7 @@ int main(int argc, char* const argv[]) {
             {"file-type",                   required_argument,  NULL, 20},
             {"filter",                      required_argument,  NULL,  9},
             {"fps",                         required_argument,  NULL,  2},
+            {"frame-limit",                 required_argument,  NULL, 22},
             {"height",                      required_argument,  NULL,  3},
             {"help",                        no_argument,        NULL,  4},
             {"key-frames-only",             no_argument,        NULL, 12},
@@ -321,6 +415,7 @@ int main(int argc, char* const argv[]) {
             {"quiet",                       no_argument,        NULL,  6},
             {"rate-limit",                  required_argument,  NULL, 15},
             {"reverse",                     no_argument,        NULL,  7},
+            {"speed",                       required_argument,  NULL, 21},
             {"sort",                        required_argument,  NULL,  8},
             {"strict-frame-ordering",       no_argument,        NULL, 13},
             {NULL,                          0,                  NULL,  0}
@@ -328,7 +423,8 @@ int main(int argc, char* const argv[]) {
 
         NSMutableDictionary *compressionSettings = [NSMutableDictionary dictionary];
 
-        double fps = 30.0;
+        double fps = 0.0;
+        double speed = 0.0;
         long height = 0;
         CMVideoCodecType codec = 'avc1';
         NSString *encoderID;
@@ -338,6 +434,7 @@ int main(int argc, char* const argv[]) {
         NSString *sortAttribute = @"creation";
         NSMutableDictionary *filter = [NSMutableDictionary dictionary];
         BOOL dryrun = NO;
+        unsigned long long frameLimit = -1;
 
         NSDictionary *sortComparators = @{
             @"name": ^(NSURL *a, NSURL *b) {
@@ -629,6 +726,29 @@ int main(int argc, char* const argv[]) {
                 case 20:
                     fileType = @(optarg);
                     break;
+                case 21: { // --speed
+                    char *end = NULL;
+
+                    speed = strtod(optarg, &end);
+
+                    if (!end || (end == optarg) || *end || (0 >= speed)) {
+                        fprintf(stderr, "Invalid --speed argument \"%s\" - expect a positive floating-point number.\n", optarg);
+                        return EINVAL;
+                    }
+
+                    break;
+                }
+                case 22: { // --frame-limit
+                    char *end = NULL;
+                    frameLimit = strtoll(optarg, &end, 0);
+
+                    if (!end || (end == optarg) || *end || (0 >= frameLimit)) {
+                        fprintf(stderr, "Invalid --frame-limit argument \"%s\" - expect a positive integer.\n", optarg);
+                        return EINVAL;
+                    }
+
+                    break;
+                }
                 default:
                     fprintf(stderr, "Invalid arguments (%d).\n", optionIndex);
                     return EINVAL;
@@ -642,12 +762,6 @@ int main(int argc, char* const argv[]) {
             fprintf(stderr, "Usage: %s [FLAGS...] SOURCE [SOURCE...] DESTINATION.MOV\n", invocationString);
             return EINVAL;
         }
-
-        DLOG(@"filter: %@", filter);
-        DLOG(@"fps: %f", fps);
-        DLOG(@"height: %ld", height);
-        DLOG(@"quiet: %s", (quiet ? "YES" : "NO"));
-        DLOG(@"sort: %@ (%s)", sortAttribute, (reverseOrder ? "reversed" : "normal"));
 
         NSFileManager *fileManager = [NSFileManager defaultManager];
         NSURL *destPath = [NSURL fileURLWithPath:[@(argv[argc - 1]) stringByExpandingTildeInPath]];
@@ -683,7 +797,17 @@ int main(int argc, char* const argv[]) {
             return 1;
         }
 
+        NSMutableArray *filePropertyKeys = [sortFileAttributeKeys[sortAttribute] mutableCopy];
+
+        if (0 < speed) {
+            if (![filePropertyKeys containsObject:NSURLCreationDateKey]) {
+                [filePropertyKeys addObject:NSURLCreationDateKey];
+            }
+        }
+
         NSMutableArray *imageFiles = [NSMutableArray array];
+        NSDate *earliestFrame, *latestFrame;
+        NSMutableDictionary *fileCreationDates = (0 < speed) ? [NSMutableDictionary dictionary] : nil;
 
         for (int i = 0; i < argc - 1; ++i) {
             NSURL *inputPath = [NSURL fileURLWithPath:[@(argv[i]) stringByExpandingTildeInPath]];
@@ -697,7 +821,7 @@ int main(int argc, char* const argv[]) {
 
             if (isDir) {
                 NSDirectoryEnumerator *directoryEnumerator = [fileManager enumeratorAtURL:inputPath
-                                                               includingPropertiesForKeys:sortFileAttributeKeys[sortAttribute]
+                                                               includingPropertiesForKeys:filePropertyKeys
                                                                                   options:(   NSDirectoryEnumerationSkipsHiddenFiles
                                                                                             | NSDirectoryEnumerationSkipsPackageDescendants)
                                                                              errorHandler:^(NSURL *url, NSError *error) {
@@ -711,10 +835,10 @@ int main(int argc, char* const argv[]) {
                 }
 
                 for (NSURL *file in directoryEnumerator) {
-                    [imageFiles addObject:file];
+                    prescanFile(file, speed, &earliestFrame, &latestFrame, fileCreationDates, imageFiles);
                 }
             } else {
-                [imageFiles addObject:inputPath];
+                prescanFile(inputPath, speed, &earliestFrame, &latestFrame, fileCreationDates, imageFiles);
             }
         }
 
@@ -724,6 +848,12 @@ int main(int argc, char* const argv[]) {
         }
         
         [imageFiles sortWithOptions:NSSortConcurrent usingComparator:sortComparators[sortAttribute]];
+
+        if (0 < frameLimit) {
+            if (imageFiles.count > frameLimit) {
+                [imageFiles removeObjectsInRange:NSMakeRange(frameLimit, imageFiles.count - frameLimit)];
+            }
+        }
 
         NSError *err = nil;
         AVAssetWriter *movie = (dryrun ? nil : [AVAssetWriter assetWriterWithURL:destPath fileType:fileType error:&err]);
@@ -738,22 +868,58 @@ int main(int argc, char* const argv[]) {
         }
 
         VTCompressionSessionRef compressionSession = NULL;
-        NSDictionary *imageSourceOptions = @{ (__bridge NSString*)kCGImageSourceShouldAllowFloat: @YES };
+
+        const double realTimeDuration = ((0 < speed) ? [latestFrame timeIntervalSinceDate:earliestFrame] : 0.0);
+
+        if (0 == fps) {
+            if (0 < speed) {
+                fps = imageFiles.count / (realTimeDuration / speed);
+            } else {
+                fps = kDefaultFPS;
+            }
+        }
 
         const long long timeValue = llround((double)timeScale / fps);
+        const double expectedMovieDuration = ((0 < speed) ? (realTimeDuration / speed): imageFiles.count / fps);
         unsigned long fileIndex = 1;  // Human-readable, so 1-based.
         unsigned long framesFilteredOut = 0;
         unsigned long framesAddedSuccessfully = 0;
         NSSize frameSize = {0, 0};
 
+        DLOG(@"Filter: %@", filter);
+        DLOG(@"FPS: %f", fps);
+        DLOG(@"Frame limit: %lld", frameLimit);
+        DLOG(@"Height: %ld", height);
+        DLOG(@"Quiet: %s", (quiet ? "YES" : "NO"));
+        DLOG(@"Movie duration: %f", expectedMovieDuration);
+        DLOG(@"Real time duration: %f", realTimeDuration);
+        DLOG(@"Sort: %@ (%s)", sortAttribute, (reverseOrder ? "reversed" : "normal"));
+        DLOG(@"Speed: %f", speed);
+        DLOG(@"Time value: %lld", timeValue);
+
+        FrameOutputContext frameOutputContext = {0};
+        NSDictionary *imageSourceOptions = @{ (__bridge NSString*)kCGImageSourceShouldAllowFloat: @YES };
+
         for (NSURL *file in imageFiles) {
             @autoreleasepool {
+                NSDate *creationDate;
+
+                if (0 < speed) {
+                    creationDate = fileCreationDates[file];
+
+                    if (!creationDate) {
+                        fprintf(stderr, "Expected to have already determined the creation date of \"%s\", yet there is no record of it.\n", file.path.UTF8String);
+                    }
+                }
+
                 CGImageSourceRef imageSource = CGImageSourceCreateWithURL((__bridge CFURLRef)file, (__bridge CFDictionaryRef)imageSourceOptions);
 
                 if (imageSource) {
                     NSDictionary *imageProperties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(imageSource, 0, (__bridge CFDictionaryRef)imageSourceOptions));
 
                     if (imageProperties) {
+                        //DLOG(@"Image properties of \"%s\": %s", file.path.UTF8String, imageProperties.description.UTF8String);
+
                         BOOL filteredOut = NO;
 
                         if (0 < filter.count) {
@@ -877,6 +1043,10 @@ int main(int argc, char* const argv[]) {
 
                                         // Now create the actual compression session to do the real work and output the result to the asset writer we just created.
 
+                                        frameOutputContext.assetWriter = movie;
+                                        frameOutputContext.assetWriterInput = movieWriter;
+                                        frameOutputContext.quiet = quiet;
+
                                         OSStatus status = VTCompressionSessionCreate(NULL,
                                                                                      width,
                                                                                      height,
@@ -887,7 +1057,7 @@ int main(int argc, char* const argv[]) {
                                                                                      NULL, // TODO: Consider pre-defining a pixel buffer pool.  Though is this done automatically if we don't do it explicitly?
                                                                                      NULL,
                                                                                      compressedFrameOutput,
-                                                                                     (__bridge void*)movieWriter,
+                                                                                     &frameOutputContext,
                                                                                      &compressionSession);
                                         
                                         if (0 != status) {
@@ -902,7 +1072,7 @@ int main(int argc, char* const argv[]) {
                                             fprintf(stderr, "Warning: Unable to determine supported compression properties, error #%d.  Will try setting them blindly, but this is likely to fail.\n", status);
                                         }
 
-                                        DLOG(@"Tweakable compression settings: %@", supportedPropertyInfo);
+                                        //DLOG(@"Tweakable compression settings: %@", supportedPropertyInfo);
 
                                         NSSet *supportedProperties = [NSSet setWithArray:((NSDictionary*)CFBridgingRelease(supportedPropertyInfo)).allKeys];
                                         NSSet *specifiedProperties = [NSSet setWithArray:compressionSettings.allKeys];
@@ -925,7 +1095,7 @@ int main(int argc, char* const argv[]) {
                                                                                      (__bridge NSString*)kVTCompressionPropertyKey_ExpectedFrameRate: @(fps),
                                                                                      (__bridge NSString*)kVTCompressionPropertyKey_H264EntropyMode: (__bridge NSString*)kVTH264EntropyMode_CABAC,
                                                                                      (__bridge NSString*)kVTCompressionPropertyKey_ProfileLevel: (__bridge NSString*)kVTProfileLevel_H264_High_AutoLevel,
-                                                                                     (__bridge NSString*)kVTCompressionPropertyKey_ExpectedDuration: @(imageFiles.count / fps)};
+                                                                                     (__bridge NSString*)kVTCompressionPropertyKey_ExpectedDuration: @(expectedMovieDuration)};
 
                                         NSMutableSet *applicableDefaultPropertyKeys = [NSMutableSet setWithArray:defaultCompressionSettings.allKeys];
                                         [applicableDefaultPropertyKeys minusSet:specifiedProperties];
@@ -953,9 +1123,32 @@ int main(int argc, char* const argv[]) {
 
                                     }
 
+#if 1
+                                    const CMTime frameTime = (0 < speed) ? CMTimeMake(([creationDate timeIntervalSinceDate:earliestFrame] / speed) * timeScale, timeScale)
+                                                                         : CMTimeMake(framesAddedSuccessfully * timeValue, timeScale);
+#else
+                                    const CMTime frameTime = (0 < speed) ? CMTimeMakeWithSeconds([creationDate timeIntervalSinceDate:earliestFrame] / speed, timeScale)
+                                                                         : CMTimeMake(framesAddedSuccessfully * timeValue, timeScale);
+#endif
+
+                                    DLOG(@"Compressing frame %lu of %lu with movie time %f (of %f) [%"PRId64" / %"PRId32" - %"PRIx32", based on date of %@ vs earliest frame's date %@, which is a difference of %f, then divided by speed of %f to give %f, then multiplied by the time scale of %"PRId32"]...",
+                                         fileIndex,
+                                         imageFiles.count,
+                                         CMTimeGetSeconds(frameTime),
+                                         expectedMovieDuration,
+                                         frameTime.value,
+                                         frameTime.timescale,
+                                         frameTime.flags,
+                                         creationDate,
+                                         earliestFrame,
+                                         [creationDate timeIntervalSinceDate:earliestFrame],
+                                         speed,
+                                         ([creationDate timeIntervalSinceDate:earliestFrame] / speed),
+                                         timeScale);
+
                                     OSStatus status = VTCompressionSessionEncodeFrame(compressionSession,
                                                                                       pixelBuffer,
-                                                                                      CMTimeMake(framesAddedSuccessfully * timeValue, timeScale),
+                                                                                      frameTime,
                                                                                       kCMTimeInvalid,
                                                                                       NULL, // TODO: Investigate per-frame properties.
                                                                                       (void*)(framesAddedSuccessfully + 1),
