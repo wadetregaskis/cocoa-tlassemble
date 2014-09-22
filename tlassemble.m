@@ -1181,7 +1181,10 @@ int main(int argc, char* const argv[]) {
                             }
                         } else {
                             ++framesFilteredOut;
-                            printf("Skipping \"%s\" that doesn't match filter (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
+
+                            if (!quiet) {
+                                printf("Skipping \"%s\" that doesn't match filter (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
+                            }
                             //NSLog(@"Properties of \"%@\" are: %@", file.path, imageProperties);
                         }
                     } else {
