@@ -898,7 +898,7 @@ int main(int argc, char* const argv[]) {
         const double expectedMovieDuration = ((0 < speed) ? (realTimeDuration / speed): imageFiles.count / fps);
         unsigned long fileIndex = 1;  // Human-readable, so 1-based.
         unsigned long framesFilteredOut = 0;
-        unsigned long framesAddedSuccessfully = 0;
+        __block unsigned long framesAddedSuccessfully = 0;
         NSSize frameSize = {0, 0};
 
         DLOG(V_CONFIGURATION, @"Filter: %@", filter);
@@ -914,6 +914,13 @@ int main(int argc, char* const argv[]) {
 
         FrameOutputContext frameOutputContext = {0};
         NSDictionary *imageSourceOptions = @{ (__bridge NSString*)kCGImageSourceShouldAllowFloat: @YES };
+
+        dispatch_queue_t encodingQueue = dispatch_queue_create("Encoding", DISPATCH_QUEUE_SERIAL);
+
+        if (!encodingQueue) {
+            fprintf(stderr, "Unable to create encoding queue.\n");
+            exit(-1);
+        }
 
         for (NSURL *file in imageFiles) {
             @autoreleasepool {
@@ -1157,35 +1164,37 @@ int main(int argc, char* const argv[]) {
                                          ([creationDate timeIntervalSinceDate:earliestFrame] / speed),
                                          timeScale);
 
-                                    OSStatus status = VTCompressionSessionEncodeFrame(compressionSession,
-                                                                                      pixelBuffer,
-                                                                                      frameTime,
-                                                                                      kCMTimeInvalid,
-                                                                                      NULL, // TODO: Investigate per-frame properties.
-                                                                                      (void*)(framesAddedSuccessfully + 1),
-                                                                                      NULL); // TODO: Check if any of these flags are useful.
-                                    if (0 == status) {
+                                    dispatch_async(encodingQueue, ^{
+                                        OSStatus status = VTCompressionSessionEncodeFrame(compressionSession,
+                                                                                          pixelBuffer,
+                                                                                          frameTime,
+                                                                                          kCMTimeInvalid,
+                                                                                          NULL, // TODO: Investigate per-frame properties.
+                                                                                          (void*)(framesAddedSuccessfully + 1),
+                                                                                          NULL); // TODO: Check if any of these flags are useful.
+                                        if (0 == status) {
 #if 1
-                                        if (compressionSession) {
-                                            status = VTCompressionSessionCompleteFrames(compressionSession, kCMTimePositiveInfinity);
+                                            if (compressionSession) {
+                                                status = VTCompressionSessionCompleteFrames(compressionSession, kCMTimePositiveInfinity);
 
-                                            if (0 != status) {
-                                                fprintf(stderr, "Warning: unable to complete compression session, error #%d.\n", status);
-                                                return 1;
+                                                if (0 != status) {
+                                                    fprintf(stderr, "Warning: unable to complete compression session, error #%d.\n", status);
+                                                    // TODO: Maybe abort encoding completely?
+                                                }
                                             }
-                                        }
 #endif
 
-                                        ++framesAddedSuccessfully;
+                                            ++framesAddedSuccessfully;
 
-                                        if (!quiet) {
-                                            printf("Processed %s (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
+                                            if (!quiet) {
+                                                printf("Processed %s (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
+                                            }
+                                        } else {
+                                            fprintf(stderr, "Unable to compress frame from \"%s\" (%lu of %lu), error #%d.\n", file.path.UTF8String, fileIndex, imageFiles.count, status);
                                         }
-                                    } else {
-                                        fprintf(stderr, "Unable to compress frame from \"%s\" (%lu of %lu), error #%d.\n", file.path.UTF8String, fileIndex, imageFiles.count, status);
-                                    }
 
-                                    CVPixelBufferRelease(pixelBuffer);
+                                        CVPixelBufferRelease(pixelBuffer);
+                                    });
                                 } else {
                                     fprintf(stderr, "Unable to create pixel buffer from \"%s\" (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
                                     return 1;
