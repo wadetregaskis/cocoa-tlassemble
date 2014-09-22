@@ -1123,13 +1123,8 @@ int main(int argc, char* const argv[]) {
 
                                     }
 
-#if 1
-                                    const CMTime frameTime = (0 < speed) ? CMTimeMake(([creationDate timeIntervalSinceDate:earliestFrame] / speed) * timeScale, timeScale)
-                                                                         : CMTimeMake(framesAddedSuccessfully * timeValue, timeScale);
-#else
                                     const CMTime frameTime = (0 < speed) ? CMTimeMakeWithSeconds([creationDate timeIntervalSinceDate:earliestFrame] / speed, timeScale)
                                                                          : CMTimeMake(framesAddedSuccessfully * timeValue, timeScale);
-#endif
 
                                     DLOG(@"Compressing frame %lu of %lu with movie time %f (of %f) [%"PRId64" / %"PRId32" - %"PRIx32", based on date of %@ vs earliest frame's date %@, which is a difference of %f, then divided by speed of %f to give %f, then multiplied by the time scale of %"PRId32"]...",
                                          fileIndex,
