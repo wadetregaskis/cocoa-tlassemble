@@ -25,12 +25,6 @@
  *  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.*
  */
 
-#ifdef DEBUG
-#define DLOG(fmt, ...) NSLog(@"%s:%d " fmt, __FILE__, __LINE__, ## __VA_ARGS__)
-#else
-#define DLOG(fmt, ...)
-#endif
-
 #include <errno.h>
 #include <getopt.h>
 #include <math.h>
@@ -47,6 +41,15 @@
 #import <ImageIO/ImageIO.h>
 #import <VideoToolbox/VideoToolbox.h>
 #import <VideoToolbox/VTVideoEncoderList.h>
+
+
+static unsigned long logLevel = 0;
+
+static const unsigned long V_CONFIGURATION = 1;
+static const unsigned long V_CONFIGURATION_OPTIONS = 2;
+static const unsigned long V_FRAME_METADATA = 3;
+
+#define DLOG(level, fmt, ...) ({ if (level < logLevel) { NSLog(@"%s:%d " fmt, __FILE__, __LINE__, ## __VA_ARGS__); } })
 
 
 static const double kDefaultFPS = 30;
@@ -358,7 +361,7 @@ void prescanFile(NSURL *file, const double speed, NSDate **earliestFrame, NSDate
 
                 if (exifProperties) {
                     NSString *dateAsString = exifProperties[(__bridge NSString*)kCGImagePropertyExifDateTimeOriginal];
-                    DLOG(@"Raw creation date for \"%@\": %@", file.path, dateAsString);
+                    DLOG(V_FRAME_METADATA, @"Raw creation date for \"%@\": %@", file.path, dateAsString);
                     creationDate = [NSDate dateWithNaturalLanguageString:dateAsString];
                 }
             } else {
@@ -380,7 +383,7 @@ void prescanFile(NSURL *file, const double speed, NSDate **earliestFrame, NSDate
         }
 
         if (creationDate) {
-            DLOG(@"Creation date of \"%@\": %@", file.path, creationDate);
+            DLOG(V_FRAME_METADATA, @"Creation date of \"%@\": %@", file.path, creationDate);
             fileCreationDates[file] = creationDate;
 
             *earliestFrame = (*earliestFrame ? [*earliestFrame earlierDate:creationDate] : creationDate);
@@ -418,6 +421,7 @@ int main(int argc, char* const argv[]) {
             {"speed",                       required_argument,  NULL, 21},
             {"sort",                        required_argument,  NULL,  8},
             {"strict-frame-ordering",       no_argument,        NULL, 13},
+            {"verbosity",                   required_argument,  NULL, 23},
             {NULL,                          0,                  NULL,  0}
         };
 
@@ -749,6 +753,17 @@ int main(int argc, char* const argv[]) {
 
                     break;
                 }
+                case 23: { // --verbosity
+                    char *end = NULL;
+                    logLevel = strtoul(optarg, &end, 0);
+
+                    if (!end || (end == optarg) || *end) {
+                        fprintf(stderr, "Invalid --verbosity argument \"%s\" - expect a positive integer (or zero).\n", optarg);
+                        return EINVAL;
+                    }
+
+                    break;
+                }
                 default:
                     fprintf(stderr, "Invalid arguments (%d).\n", optionIndex);
                     return EINVAL;
@@ -765,7 +780,7 @@ int main(int argc, char* const argv[]) {
 
         NSFileManager *fileManager = [NSFileManager defaultManager];
         NSURL *destPath = [NSURL fileURLWithPath:[@(argv[argc - 1]) stringByExpandingTildeInPath]];
-        DLOG(@"Destination Path: %@", destPath);
+        DLOG(V_CONFIGURATION, @"Destination Path: %@", destPath);
 
         if (!fileType) {
             NSString *fileExtension = destPath.pathExtension.lowercaseString;
@@ -812,7 +827,7 @@ int main(int argc, char* const argv[]) {
         for (int i = 0; i < argc - 1; ++i) {
             NSURL *inputPath = [NSURL fileURLWithPath:[@(argv[i]) stringByExpandingTildeInPath]];
 
-            DLOG(@"Input Path: %@", inputPath);
+            DLOG(V_CONFIGURATION, @"Input Path: %@", inputPath);
 
             if (![fileManager fileExistsAtPath:inputPath.path isDirectory:&isDir]) {
                 fprintf(stderr, "Error: \"%s\" does not exist.\n", argv[i]);
@@ -886,16 +901,16 @@ int main(int argc, char* const argv[]) {
         unsigned long framesAddedSuccessfully = 0;
         NSSize frameSize = {0, 0};
 
-        DLOG(@"Filter: %@", filter);
-        DLOG(@"FPS: %f", fps);
-        DLOG(@"Frame limit: %lld", frameLimit);
-        DLOG(@"Height: %ld", height);
-        DLOG(@"Quiet: %s", (quiet ? "YES" : "NO"));
-        DLOG(@"Movie duration: %f", expectedMovieDuration);
-        DLOG(@"Real time duration: %f", realTimeDuration);
-        DLOG(@"Sort: %@ (%s)", sortAttribute, (reverseOrder ? "reversed" : "normal"));
-        DLOG(@"Speed: %f", speed);
-        DLOG(@"Time value: %lld", timeValue);
+        DLOG(V_CONFIGURATION, @"Filter: %@", filter);
+        DLOG(V_CONFIGURATION, @"FPS: %f", fps);
+        DLOG(V_CONFIGURATION, @"Frame limit: %lld", frameLimit);
+        DLOG(V_CONFIGURATION, @"Height: %ld", height);
+        DLOG(V_CONFIGURATION, @"Quiet: %s", (quiet ? "YES" : "NO"));
+        DLOG(V_CONFIGURATION, @"Movie duration: %f", expectedMovieDuration);
+        DLOG(V_CONFIGURATION, @"Real time duration: %f", realTimeDuration);
+        DLOG(V_CONFIGURATION, @"Sort: %@ (%s)", sortAttribute, (reverseOrder ? "reversed" : "normal"));
+        DLOG(V_CONFIGURATION, @"Speed: %f", speed);
+        DLOG(V_CONFIGURATION, @"Time value: %lld", timeValue);
 
         FrameOutputContext frameOutputContext = {0};
         NSDictionary *imageSourceOptions = @{ (__bridge NSString*)kCGImageSourceShouldAllowFloat: @YES };
@@ -918,7 +933,7 @@ int main(int argc, char* const argv[]) {
                     NSDictionary *imageProperties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(imageSource, 0, (__bridge CFDictionaryRef)imageSourceOptions));
 
                     if (imageProperties) {
-                        //DLOG(@"Image properties of \"%s\": %s", file.path.UTF8String, imageProperties.description.UTF8String);
+                        DLOG(V_FRAME_METADATA, @"Image properties of \"%s\": %s", file.path.UTF8String, imageProperties.description.UTF8String);
 
                         BOOL filteredOut = NO;
 
@@ -993,7 +1008,7 @@ int main(int argc, char* const argv[]) {
                                 {
                                     static BOOL haveLoggedDimensions = NO;
                                     if (!haveLoggedDimensions) {
-                                        DLOG(@"Movie dimensions: %ld x %ld", width, height);
+                                        DLOG(V_CONFIGURATION, @"Movie dimensions: %ld x %ld", width, height);
                                         haveLoggedDimensions = YES;
                                     }
                                 }
@@ -1072,7 +1087,7 @@ int main(int argc, char* const argv[]) {
                                             fprintf(stderr, "Warning: Unable to determine supported compression properties, error #%d.  Will try setting them blindly, but this is likely to fail.\n", status);
                                         }
 
-                                        //DLOG(@"Tweakable compression settings: %@", supportedPropertyInfo);
+                                        DLOG(V_CONFIGURATION_OPTIONS, @"Tweakable compression settings: %@", supportedPropertyInfo);
 
                                         NSSet *supportedProperties = [NSSet setWithArray:((NSDictionary*)CFBridgingRelease(supportedPropertyInfo)).allKeys];
                                         NSSet *specifiedProperties = [NSSet setWithArray:compressionSettings.allKeys];
@@ -1112,7 +1127,7 @@ int main(int argc, char* const argv[]) {
                                             return 1;
                                         }
 
-                                        DLOG(@"Applied compression settings: %@", compressionSettings);
+                                        DLOG(V_CONFIGURATION, @"Applied compression settings: %@", compressionSettings);
 
                                         status = VTCompressionSessionPrepareToEncodeFrames(compressionSession);
 
@@ -1126,7 +1141,8 @@ int main(int argc, char* const argv[]) {
                                     const CMTime frameTime = (0 < speed) ? CMTimeMakeWithSeconds([creationDate timeIntervalSinceDate:earliestFrame] / speed, timeScale)
                                                                          : CMTimeMake(framesAddedSuccessfully * timeValue, timeScale);
 
-                                    DLOG(@"Compressing frame %lu of %lu with movie time %f (of %f) [%"PRId64" / %"PRId32" - %"PRIx32", based on date of %@ vs earliest frame's date %@, which is a difference of %f, then divided by speed of %f to give %f, then multiplied by the time scale of %"PRId32"]...",
+                                    DLOG(V_FRAME_METADATA,
+                                         @"Compressing frame %lu of %lu with movie time %f (of %f) [%"PRId64" / %"PRId32" - %"PRIx32", based on date of %@ vs earliest frame's date %@, which is a difference of %f, then divided by speed of %f to give %f, then multiplied by the time scale of %"PRId32"]...",
                                          fileIndex,
                                          imageFiles.count,
                                          CMTimeGetSeconds(frameTime),
