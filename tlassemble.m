@@ -51,6 +51,8 @@ static const unsigned long V_FRAME_METADATA = 3;
 
 #define DLOG(level, fmt, ...) ({ if (level < logLevel) { NSLog(@"%s:%d " fmt, __FILE__, __LINE__, ## __VA_ARGS__); } })
 
+#define LOG_WARNING(format, ...) ({ fflush(stdout); fprintf(stderr, "%s", [NSString stringWithFormat:@"WARNING: " format "\n", ## __VA_ARGS__].UTF8String); fflush(stderr); })
+#define LOG_ERROR(format, ...) ({ fflush(stdout); fprintf(stderr, "%s", [NSString stringWithFormat:@"ERROR: " format "\n", ## __VA_ARGS__].UTF8String); fflush(stderr); })
 
 static const double kDefaultFPS = 30;
 
@@ -126,29 +128,29 @@ static CVPixelBufferRef CreatePixelBufferFromCGImage(CGImageRef image, NSSize fr
                                            image);
                         CGContextRelease(context);
                     } else {
-                        fprintf(stderr, "Unable to create a new bitmap context around the pixel buffer.\n");
+                        LOG_ERROR("Unable to create a new bitmap context around the pixel buffer.");
                         status = kCVReturnError;
                     }
 
                     CGColorSpaceRelease(colourSpace);
                 } else {
-                    fprintf(stderr, "Unable to create a device RGB colour space.\n");
+                    LOG_ERROR("Unable to create a device RGB colour space.");
                 }
             } else {
-                fprintf(stderr, "Unable to get a raw pointer to the pixel buffer.\n");
+                LOG_ERROR("Unable to get a raw pointer to the pixel buffer.");
                 status = kCVReturnError;
             }
 
             const CVReturn nonFatalStatus = CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
 
             if (kCVReturnSuccess != nonFatalStatus) {
-                fprintf(stderr, "Warning: unable to unlock pixel buffer, error #%d: %s\n", nonFatalStatus, DescriptionOfCVReturn(nonFatalStatus));
+                LOG_WARNING("Unable to unlock pixel buffer, error #%d: %s", nonFatalStatus, DescriptionOfCVReturn(nonFatalStatus));
             }
         } else {
-            fprintf(stderr, "Unable to lock pixel buffer, error #%d: %s\n", status, DescriptionOfCVReturn(status));
+            LOG_ERROR("Unable to lock pixel buffer, error #%d: %s", status, DescriptionOfCVReturn(status));
         }
     } else {
-        fprintf(stderr, "Unable to create a pixel buffer, error #%d: %s\n", status, DescriptionOfCVReturn(status));
+        LOG_ERROR("Unable to create a pixel buffer, error #%d: %s", status, DescriptionOfCVReturn(status));
     }
 
     if (kCVReturnSuccess != status) {
@@ -187,7 +189,7 @@ static void compressedFrameOutput(void *rawContext,
                                   VTEncodeInfoFlags infoFlags,
                                   CMSampleBufferRef sampleBuffer) {
     if (0 != status) {
-        fprintf(stderr, "Unable to compress frame #%"PRIuPTR", error #%d.\n", (uintptr_t)frameNumber, status);
+        LOG_ERROR("Unable to compress frame #%"PRIuPTR", error #%d.", (uintptr_t)frameNumber, status);
         exit(1);
     }
 
@@ -200,11 +202,10 @@ static void compressedFrameOutput(void *rawContext,
                     printf("Completed frame #%"PRIuPTR".\n", (uintptr_t)frameNumber);
                 }
             } else {
-                fprintf(stderr,
-                        "Unable to append compressed frame #%"PRIuPTR" to file, status = %s (%s).\n",
-                        (uintptr_t)frameNumber,
-                        NameOfAVAssetWriterStatus(context->assetWriter.status),
-                        context->assetWriter.error.description.UTF8String);
+                LOG_ERROR("Unable to append compressed frame #%"PRIuPTR" to file, status = %s (%s).",
+                          (uintptr_t)frameNumber,
+                          NameOfAVAssetWriterStatus(context->assetWriter.status),
+                          context->assetWriter.error.description.UTF8String);
                 exit(1);
             }
         }
@@ -365,19 +366,19 @@ void prescanFile(NSURL *file, const double speed, NSDate **earliestFrame, NSDate
                     creationDate = [NSDate dateWithNaturalLanguageString:dateAsString];
                 }
             } else {
-                fprintf(stderr, "Unable to get image metadata for \"%s\".\n", file.path.UTF8String);
+                LOG_ERROR("Unable to get image metadata for \"%@\".", file.path);
                 fileLooksGood = NO;
             }
 
             CFRelease(imageSource);
         } else {
-            fprintf(stderr, "Unable to create an image source for \"%s\".\n", file.path.UTF8String);
+            LOG_ERROR("Unable to create an image source for \"%@\".", file.path);
             fileLooksGood = NO;
         }
 
         if (!creationDate) {
             if (![file getResourceValue:&creationDate forKey:NSURLCreationDateKey error:&err]) {
-                fprintf(stderr, "Unable to determine the creation date of \"%s\".\n", file.path.UTF8String);
+                LOG_ERROR("Unable to determine the creation date of \"%@\".", file.path);
                 fileLooksGood = NO;
             }
         }
@@ -454,10 +455,10 @@ int main(int argc, char* const argv[]) {
                 NSError *err = nil;
 
                 if (![a getResourceValue:&aCreationDate forKey:NSURLCreationDateKey error:&err]) {
-                    fprintf(stderr, "Unable to determine the creation date of \"%s\".\n", a.path.UTF8String);
+                    LOG_ERROR("Unable to determine the creation date of \"%@\".", a.path);
                     return (reverseOrder ? NSOrderedAscending : NSOrderedDescending);
                 } else if (![b getResourceValue:&bCreationDate forKey:NSURLCreationDateKey error:&err]) {
-                    fprintf(stderr, "Unable to determine the creation date of \"%s\".\n", b.path.UTF8String);
+                    LOG_ERROR("Unable to determine the creation date of \"%@\".", b.path);
                     return (reverseOrder ? NSOrderedDescending : NSOrderedAscending);
                 } else {
                     return (reverseOrder ? [bCreationDate compare:aCreationDate] : [aCreationDate compare:bCreationDate]);
@@ -475,7 +476,7 @@ int main(int argc, char* const argv[]) {
                     const OSStatus status = VTCopyVideoEncoderList(NULL, &supportedVideoEncoders);
 
                     if (0 != status) {
-                        fprintf(stderr, "Unable to determine the supported video codecs, error #%d.\n", status);
+                        LOG_ERROR("Unable to determine the supported video codecs, error #%d.", status);
                         return 1;
                     }
 
@@ -486,7 +487,7 @@ int main(int argc, char* const argv[]) {
                         NSString *codecName = codecSpec[(__bridge NSString*)kVTVideoEncoderList_DisplayName];
 
                         if (codecMap[codecName]) {
-                            fprintf(stderr, "Warning: found two encoders with the same name - \"%s\".\n", codecName.UTF8String);
+                            LOG_WARNING("Found two encoders with the same name - \"%@\".", codecName);
                         }
 
                         codecMap[codecName] = codecSpec[(__bridge NSString*)kVTVideoEncoderList_CodecType];
@@ -497,13 +498,11 @@ int main(int argc, char* const argv[]) {
                     encoderID = encoderMap[@(optarg)];
 
                     if (!codec || !encoderID) {
-                        fprintf(stderr, "Unrecognised codec \"%s\".  Supported codecs are:", optarg);
+                        LOG_ERROR("Unrecognised codec \"%s\".  Supported codecs are:", optarg);
 
                         for (NSString *code in [codecMap.allKeys sortedArrayUsingSelector:@selector(caseInsensitiveCompare:)]) {
-                            fprintf(stderr, "\n  %s", code.UTF8String);
+                            LOG_ERROR("    %@", code);
                         }
-
-                        fprintf(stderr, "\n");
 
                         return EINVAL;
                     }
@@ -515,7 +514,7 @@ int main(int argc, char* const argv[]) {
                     fps = strtod(optarg, &end);
 
                     if (!end || (end == optarg) || *end || (0 >= fps)) {
-                        fprintf(stderr, "Invalid argument \"%s\" to --fps.  Should be a non-zero, positive real value (e.g. 24.0, 29.97, etc).\n", optarg);
+                        LOG_ERROR("Invalid argument \"%s\" to --fps.  Should be a non-zero, positive real value (e.g. 24.0, 29.97, etc).", optarg);
                         return EINVAL;
                     }
 
@@ -526,7 +525,7 @@ int main(int argc, char* const argv[]) {
                     height = strtol(optarg, &end, 0);
 
                     if (!end || (end == optarg) || *end || (0 >= height)) {
-                        fprintf(stderr, "Invalid argument \"%s\" to --height.  Should be a non-zero, positive integer.\n", optarg);
+                        LOG_ERROR("Invalid argument \"%s\" to --height.  Should be a non-zero, positive integer.", optarg);
                         return EINVAL;
                     }
 
@@ -566,7 +565,7 @@ int main(int argc, char* const argv[]) {
                     if (end && (end != optarg) && !*end && (0.0 <= quality) && (1.0 >= quality)) {
                         compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_Quality] = @(quality);
                     } else {
-                        fprintf(stderr, "Invalid --quality argument \"%s\" - expect a floating-point value between 0.0 and 1.0 (inclusive).\n", optarg);
+                        LOG_ERROR("Invalid --quality argument \"%s\" - expect a floating-point value between 0.0 and 1.0 (inclusive).", optarg);
                         return EINVAL;
                     }
 
@@ -582,13 +581,11 @@ int main(int argc, char* const argv[]) {
                     sortAttribute = @(optarg);
 
                     if (!sortComparators[sortAttribute]) {
-                        fprintf(stderr, "Unsupported sort method \"%s\".  Supported methods are:", optarg);
+                        LOG_ERROR("Unsupported sort method \"%s\".  Supported methods are:", optarg);
 
                         for (NSString *method in sortComparators) {
-                            fprintf(stderr, " %s", method.UTF8String);
+                            LOG_ERROR("    %@", method);
                         }
-
-                        fprintf(stderr, "\n");
 
                         return EINVAL;
                     }
@@ -601,7 +598,7 @@ int main(int argc, char* const argv[]) {
                         NSCharacterSet *whitespace = NSCharacterSet.whitespaceAndNewlineCharacterSet;
                         filter[[pair[0] stringByTrimmingCharactersInSet:whitespace].lowercaseString] = [pair[1] stringByTrimmingCharactersInSet:whitespace];
                     } else {
-                        fprintf(stderr, "Unable to parse filter argument \"%s\" - expected something like 'property = value'.\n", optarg);
+                        LOG_ERROR("Unable to parse filter argument \"%s\" - expected something like 'property = value'.", optarg);
                         return EINVAL;
                     }
 
@@ -628,7 +625,7 @@ int main(int argc, char* const argv[]) {
                     }
 
                     if (!allGood) {
-                        fprintf(stderr, "Invalid parameter \"%s\" to --max_key_frame_period.  Expected an integer number of frames or a floating-point unit of time with appropriate suffix (e.g. 's', 'ms', etc).\n", optarg);
+                        LOG_ERROR("Invalid parameter \"%s\" to --max_key_frame_period.  Expected an integer number of frames or a floating-point unit of time with appropriate suffix (e.g. 's', 'ms', etc).", optarg);
                         return EINVAL;
                     }
 
@@ -658,7 +655,7 @@ int main(int argc, char* const argv[]) {
                     if (allGood) {
                         compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_AverageBitRate] = @(averageBitRate);
                     } else {
-                        fprintf(stderr, "Invalid --average-bit-rate argument \"%s\" - expected a floating-point number optionally followed by units (e.g. 'Mb' [implied per second] or 'kB/ms' etc).\n", optarg);
+                        LOG_ERROR("Invalid --average-bit-rate argument \"%s\" - expected a floating-point number optionally followed by units (e.g. 'Mb' [implied per second] or 'kB/ms' etc).", optarg);
                         return EINVAL;
                     }
 
@@ -688,7 +685,7 @@ int main(int argc, char* const argv[]) {
                         [compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_DataRateLimits] addObject:@(rateLimit)];
                         [compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_DataRateLimits] addObject:@(interval)];
                     } else {
-                        fprintf(stderr, "Invalid --rate-limit argument \"%s\" - expected a floating-point number optionally followed by units (e.g. 'Mb' [implied per second] or 'kB/ms' or 'b/10s' etc).\n", optarg);
+                        LOG_ERROR("Invalid --rate-limit argument \"%s\" - expected a floating-point number optionally followed by units (e.g. 'Mb' [implied per second] or 'kB/ms' or 'b/10s' etc).", optarg);
                         return EINVAL;
                     }
                     
@@ -708,7 +705,7 @@ int main(int argc, char* const argv[]) {
                     if (mode) {
                         compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_H264EntropyMode] = mode;
                     } else {
-                        fprintf(stderr, "Unrecognised entropy mode \"%s\".\n", optarg);
+                        LOG_ERROR("Unrecognised entropy mode \"%s\".", optarg);
                         return EINVAL;
                     }
 
@@ -721,7 +718,7 @@ int main(int argc, char* const argv[]) {
                     if (end && (end != optarg) && !*end) {
                         compressionSettings[(__bridge NSString*)kVTCompressionPropertyKey_MaxFrameDelayCount] = @(maxFrameDelay);
                     } else {
-                        fprintf(stderr, "Invalid --max-frame-delay argument \"%s\" - expect a positive integer (or zero).\n", optarg);
+                        LOG_ERROR("Invalid --max-frame-delay argument \"%s\" - expect a positive integer (or zero).", optarg);
                         return EINVAL;
                     }
 
@@ -736,7 +733,7 @@ int main(int argc, char* const argv[]) {
                     speed = strtod(optarg, &end);
 
                     if (!end || (end == optarg) || *end || (0 >= speed)) {
-                        fprintf(stderr, "Invalid --speed argument \"%s\" - expect a positive floating-point number.\n", optarg);
+                        LOG_ERROR("Invalid --speed argument \"%s\" - expect a positive floating-point number.", optarg);
                         return EINVAL;
                     }
 
@@ -747,7 +744,7 @@ int main(int argc, char* const argv[]) {
                     frameLimit = strtoll(optarg, &end, 0);
 
                     if (!end || (end == optarg) || *end || (0 >= frameLimit)) {
-                        fprintf(stderr, "Invalid --frame-limit argument \"%s\" - expect a positive integer.\n", optarg);
+                        LOG_ERROR("Invalid --frame-limit argument \"%s\" - expect a positive integer.", optarg);
                         return EINVAL;
                     }
 
@@ -758,14 +755,14 @@ int main(int argc, char* const argv[]) {
                     logLevel = strtoul(optarg, &end, 0);
 
                     if (!end || (end == optarg) || *end) {
-                        fprintf(stderr, "Invalid --verbosity argument \"%s\" - expect a positive integer (or zero).\n", optarg);
+                        LOG_ERROR("Invalid --verbosity argument \"%s\" - expect a positive integer (or zero).", optarg);
                         return EINVAL;
                     }
 
                     break;
                 }
                 default:
-                    fprintf(stderr, "Invalid arguments (%d).\n", optionIndex);
+                    LOG_ERROR("Invalid arguments (%d).", optionIndex);
                     return EINVAL;
             }
         }
@@ -774,6 +771,7 @@ int main(int argc, char* const argv[]) {
         argv += optind;
 
         if (2 > argc) {
+            LOG_ERROR("Expect additional parameters specifying the source & destination.");
             fprintf(stderr, "Usage: %s [FLAGS...] SOURCE [SOURCE...] DESTINATION.MOV\n", invocationString);
             return EINVAL;
         }
@@ -799,16 +797,15 @@ int main(int argc, char* const argv[]) {
         }
 
         if ([fileManager fileExistsAtPath:destPath.path]) {
-            fprintf(stderr, "Error: Output file already exists.\n");
+            LOG_ERROR("Output file (\"%@\") already exists.", destPath.path);
             return 1;
         }
 
         BOOL isDir;
         if (!([fileManager fileExistsAtPath:[destPath.path stringByDeletingLastPathComponent]
-                                isDirectory:&isDir] && isDir)) {
-            fprintf(stderr,
-                    "Error: Output file is not writable. "
-                    "Does the destination directory exist?\n");
+                                isDirectory:&isDir]
+              && isDir)) {
+            LOG_ERROR("Output file (\"%@\") is not writable.  Does the destination directory exist?", destPath.path);
             return 1;
         }
 
@@ -830,7 +827,7 @@ int main(int argc, char* const argv[]) {
             DLOG(V_CONFIGURATION, @"Input Path: %@", inputPath);
 
             if (![fileManager fileExistsAtPath:inputPath.path isDirectory:&isDir]) {
-                fprintf(stderr, "Error: \"%s\" does not exist.\n", argv[i]);
+                LOG_ERROR("Input file/folder \"%@\" does not exist.", inputPath.path);
                 return EINVAL;
             }
 
@@ -840,12 +837,12 @@ int main(int argc, char* const argv[]) {
                                                                                   options:(   NSDirectoryEnumerationSkipsHiddenFiles
                                                                                             | NSDirectoryEnumerationSkipsPackageDescendants)
                                                                              errorHandler:^(NSURL *url, NSError *error) {
-                    fprintf(stderr, "Error while looking for images in \"%s\": %s\n", url.path.UTF8String, error.localizedDescription.UTF8String);
+                    LOG_ERROR("Error while looking for images in \"%@\": %@", url.path, error.localizedDescription);
                     return YES;
                 }];
 
                 if (!directoryEnumerator) {
-                    fprintf(stderr, "Unable to enumerate files in \"%s\".\n", inputPath.path.UTF8String);
+                    LOG_ERROR("Unable to enumerate files in \"%@\".", inputPath.path);
                     return -1;
                 }
 
@@ -858,7 +855,7 @@ int main(int argc, char* const argv[]) {
         }
 
         if (0 == imageFiles.count) {
-            fprintf(stderr, "No files found in input path(s).\n");
+            LOG_ERROR("No suitable image files found in input path(s).");
             return -1;
         }
         
@@ -877,7 +874,7 @@ int main(int argc, char* const argv[]) {
 
         if (!dryrun) {
             if (!movie) {
-                fprintf(stderr, "Error: Unable to initialize AVAssetWriter: %s.\nTry 'tlassemble --help' for more information.\n", err.localizedDescription.UTF8String);
+                LOG_ERROR("Unable to initialize AVAssetWriter: %@.  Try 'tlassemble --help' for more information.", err.localizedDescription);
                 return 1;
             }
         }
@@ -918,7 +915,7 @@ int main(int argc, char* const argv[]) {
         dispatch_queue_t encodingQueue = dispatch_queue_create("Encoding", DISPATCH_QUEUE_SERIAL);
 
         if (!encodingQueue) {
-            fprintf(stderr, "Unable to create encoding queue.\n");
+            LOG_ERROR("Unable to create encoding queue.");
             exit(-1);
         }
 
@@ -930,7 +927,7 @@ int main(int argc, char* const argv[]) {
                     creationDate = fileCreationDates[file];
 
                     if (!creationDate) {
-                        fprintf(stderr, "Expected to have already determined the creation date of \"%s\", yet there is no record of it.\n", file.path.UTF8String);
+                        LOG_ERROR("Expected to have already determined the creation date of \"%@\", yet there is no record of it.", file.path);
                     }
                 }
 
@@ -982,13 +979,12 @@ int main(int argc, char* const argv[]) {
                                 if ((0 != frameSize.width) && (0 != frameSize.height)) {
                                     if (    (frameSize.width != CGImageGetWidth(image))
                                          || (frameSize.height != CGImageGetHeight(image))) {
-                                        fprintf(stderr,
-                                                "First frame (and thus output movie) has size %llu x %llu, but frame #%lu has size %zu x %zu.  The resulting movie may be deformed.\n",
-                                                (unsigned long long)frameSize.width,
-                                                (unsigned long long)frameSize.height,
-                                                fileIndex,
-                                                CGImageGetWidth(image),
-                                                CGImageGetHeight(image));
+                                        LOG_WARNING("First frame (and thus output movie) has size %llu x %llu, but frame #%lu has size %zu x %zu.  The resulting movie may be deformed.\n",
+                                                    (unsigned long long)frameSize.width,
+                                                    (unsigned long long)frameSize.height,
+                                                    fileIndex,
+                                                    CGImageGetWidth(image),
+                                                    CGImageGetHeight(image));
                                     }
                                 } else {
                                     frameSize = NSMakeSize(CGImageGetWidth(image), CGImageGetHeight(image));
@@ -1007,7 +1003,7 @@ int main(int argc, char* const argv[]) {
                                     static BOOL warnedOnce = NO;
 
                                     if (!warnedOnce) {
-                                        fprintf(stderr, "Warning: movies with heights greater than %lu pixels are known to not work (either they'll fail immediately with an error from the compression engine, or appear to work but the resulting movie file will be essentially empty).\n", kSafeHeightLimit); fflush(stderr);
+                                        LOG_WARNING("Movies with heights greater than %lu pixels are known to not work (either they'll fail immediately with an error from the compression engine, or appear to work but the resulting movie file will be essentially empty).", kSafeHeightLimit); fflush(stderr);
                                         warnedOnce = YES;
                                     }
                                 }
@@ -1036,7 +1032,7 @@ int main(int argc, char* const argv[]) {
                                                                                              &videoFormatDescription);
 
                                             if (0 != status) {
-                                                fprintf(stderr, "Unable to create video format description hint, error #%d.\n", status);
+                                                LOG_ERROR("Unable to create video format description hint, error #%d.", status);
                                                 return 1;
                                             }
 
@@ -1048,7 +1044,7 @@ int main(int argc, char* const argv[]) {
                                         }
 
                                         if (!movieWriter) {
-                                            fprintf(stderr, "Error: Unable to initialize AVAssetWriterInput.\n");
+                                            LOG_ERROR("Unable to initialize AVAssetWriterInput.");
                                             return 1;
                                         }
 
@@ -1057,7 +1053,7 @@ int main(int argc, char* const argv[]) {
                                         [movie addInput:movieWriter];
 
                                         if (![movie startWriting]) {
-                                            fprintf(stderr, "Error: Unable to start writing movie file: %s\n", movie.error.localizedDescription.UTF8String);
+                                            LOG_ERROR("Unable to start writing movie file: %@", movie.error.localizedDescription);
                                             return 1;
                                         }
                                         
@@ -1083,7 +1079,7 @@ int main(int argc, char* const argv[]) {
                                                                                      &compressionSession);
                                         
                                         if (0 != status) {
-                                            fprintf(stderr, "Unable to create compression session, error #%d.\n", status);
+                                            LOG_ERROR("Unable to create compression session, error #%d.", status);
                                             return 1;
                                         }
 
@@ -1091,7 +1087,7 @@ int main(int argc, char* const argv[]) {
                                         status = VTSessionCopySupportedPropertyDictionary(compressionSession, &supportedPropertyInfo);
 
                                         if (0 != status) {
-                                            fprintf(stderr, "Warning: Unable to determine supported compression properties, error #%d.  Will try setting them blindly, but this is likely to fail.\n", status);
+                                            LOG_WARNING("Unable to determine supported compression properties, error #%d.  Will try setting them blindly, but this is likely to fail.", status);
                                         }
 
                                         DLOG(V_CONFIGURATION_OPTIONS, @"Tweakable compression settings: %@", supportedPropertyInfo);
@@ -1103,10 +1099,10 @@ int main(int argc, char* const argv[]) {
                                             NSMutableSet *unsupportedProperties = specifiedProperties.mutableCopy;
                                             [unsupportedProperties minusSet:supportedProperties];
 
-                                            fprintf(stderr, "Warning: the following compression properties are not supported in this configuration, and will be ignored:\n");
+                                            LOG_WARNING("The following compression properties are not supported in this configuration, and will be ignored:");
 
                                             for (NSString *property in unsupportedProperties) {
-                                                fprintf(stderr, "  %s\n", property.UTF8String);
+                                                LOG_WARNING("    %@", property);
                                                 [compressionSettings removeObjectForKey:property];
                                             }
                                         }
@@ -1130,7 +1126,7 @@ int main(int argc, char* const argv[]) {
                                         status = VTSessionSetProperties(compressionSession, (__bridge CFDictionaryRef)compressionSettings);
 
                                         if (0 != status) {
-                                            fprintf(stderr, "Unable to set compression properties, error #%d, to:\n%s\n", status, compressionSettings.description.UTF8String);
+                                            LOG_ERROR("Unable to set compression properties, error #%d, to: %@", status, compressionSettings.description);
                                             return 1;
                                         }
 
@@ -1139,7 +1135,7 @@ int main(int argc, char* const argv[]) {
                                         status = VTCompressionSessionPrepareToEncodeFrames(compressionSession);
 
                                         if (0 != status) {
-                                            fprintf(stderr, "Unable to prepare compression session, error #%d.\n", status);
+                                            LOG_ERROR("Unable to prepare compression session, error #%d.", status);
                                             return 1;
                                         }
 
@@ -1178,7 +1174,7 @@ int main(int argc, char* const argv[]) {
                                                 status = VTCompressionSessionCompleteFrames(compressionSession, kCMTimePositiveInfinity);
 
                                                 if (0 != status) {
-                                                    fprintf(stderr, "Warning: unable to complete compression session, error #%d.\n", status);
+                                                    LOG_WARNING("Unable to complete compression session, error #%d.", status);
                                                     // TODO: Maybe abort encoding completely?
                                                 }
                                             }
@@ -1190,19 +1186,19 @@ int main(int argc, char* const argv[]) {
                                                 printf("Processed %s (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
                                             }
                                         } else {
-                                            fprintf(stderr, "Unable to compress frame from \"%s\" (%lu of %lu), error #%d.\n", file.path.UTF8String, fileIndex, imageFiles.count, status);
+                                            LOG_ERROR("Unable to compress frame from \"%@\" (%lu of %lu), error #%d.", file.path, fileIndex, imageFiles.count, status);
                                         }
 
                                         CVPixelBufferRelease(pixelBuffer);
                                     });
                                 } else {
-                                    fprintf(stderr, "Unable to create pixel buffer from \"%s\" (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
+                                    LOG_ERROR("Unable to create pixel buffer from \"%@\" (%lu of %lu).", file.path, fileIndex, imageFiles.count);
                                     return 1;
                                 }
 
                                 CGImageRelease(image);
                             } else {
-                                fprintf(stderr, "Unable to render \"%s\" (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
+                                LOG_ERROR("Unable to render \"%@\" (%lu of %lu).", file.path, fileIndex, imageFiles.count);
                             }
                         } else {
                             ++framesFilteredOut;
@@ -1213,12 +1209,12 @@ int main(int argc, char* const argv[]) {
                             //NSLog(@"Properties of \"%@\" are: %@", file.path, imageProperties);
                         }
                     } else {
-                        fprintf(stderr, "Unable to get metadata for \"%s\" (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
+                        LOG_ERROR("Unable to get metadata for \"%@\" (%lu of %lu).", file.path, fileIndex, imageFiles.count);
                     }
 
                     CFRelease(imageSource);
                 } else {
-                    fprintf(stderr, "Unable to read \"%s\" (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
+                    LOG_ERROR("Unable to read \"%@\" (%lu of %lu).", file.path, fileIndex, imageFiles.count);
                 }
             }
 
@@ -1230,7 +1226,7 @@ int main(int argc, char* const argv[]) {
             const OSStatus status = VTCompressionSessionCompleteFrames(compressionSession, kCMTimePositiveInfinity);
 
             if (0 != status) {
-                fprintf(stderr, "Warning: unable to complete compression session, error #%d.\n", status);
+                LOG_WARNING("Unable to complete compression session, error #%d.", status);
                 return 1;
             }
         }
@@ -1241,7 +1237,7 @@ int main(int argc, char* const argv[]) {
 
             [movie finishWritingWithCompletionHandler:^{
                 if (AVAssetWriterStatusCompleted != movie.status) {
-                    fprintf(stderr, "Unable to complete movie: %s\n", movie.error.localizedDescription.UTF8String);
+                    LOG_ERROR("Unable to complete movie: %@", movie.error.localizedDescription);
                     exit(1);
                 }
 
@@ -1253,7 +1249,7 @@ int main(int argc, char* const argv[]) {
 
         if (0 < framesAddedSuccessfully) {
             if (framesAddedSuccessfully != imageFiles.count) {
-                fprintf(stderr, "Warning: source folder contained %lu files but only %lu were readable as images (of which %lu were filtered out).\n", imageFiles.count, framesAddedSuccessfully, framesFilteredOut);
+                LOG_WARNING("Source folder contained %lu files but only %lu were readable as images (of which %lu were filtered out).", imageFiles.count, framesAddedSuccessfully, framesFilteredOut);
             } else {
                 if (dryrun) {
                     printf("Would probably have successfully created \"%s\" out of %lu images (%lu others being filtered out, and %lu other files not being readable).\n",
@@ -1273,7 +1269,7 @@ int main(int argc, char* const argv[]) {
 
             return 0;
         } else {
-            fprintf(stderr, "None of the %lu input files were readable as images.\n", imageFiles.count);
+            LOG_ERROR("None of the %lu input files were readable as images.", imageFiles.count);
             return -1;
         }
     }
