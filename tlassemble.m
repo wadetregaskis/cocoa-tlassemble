@@ -1274,8 +1274,10 @@ int main(int argc, char* const argv[]) {
             dispatch_semaphore_wait(barrier, DISPATCH_TIME_FOREVER);
         }
 
-        CFRelease((__bridge CFTypeRef)frameOutputContext);
-
+        if (compressionSession) {
+            CFRelease((__bridge CFTypeRef)frameOutputContext);
+        }
+        
         if (0 < framesAddedSuccessfully) {
             if (framesAddedSuccessfully != imageFiles.count) {
                 LOG_WARNING("Source folder contained %lu files but only %lu were readable as images (of which %lu were filtered out).", imageFiles.count, framesAddedSuccessfully, framesFilteredOut);
