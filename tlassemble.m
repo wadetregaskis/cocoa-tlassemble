@@ -49,7 +49,7 @@ static const unsigned long V_CONFIGURATION = 1;
 static const unsigned long V_CONFIGURATION_OPTIONS = 2;
 static const unsigned long V_FRAME_METADATA = 3;
 
-#define DLOG(level, fmt, ...) ({ if (level < logLevel) { NSLog(@"%s:%d " fmt, __FILE__, __LINE__, ## __VA_ARGS__); } })
+#define DLOG(level, fmt, ...) ({ if (level <= logLevel) { NSLog(@"%s:%d " fmt, __FILE__, __LINE__, ## __VA_ARGS__); } })
 
 #define LOG_WARNING(format, ...) ({ fflush(stdout); fprintf(stderr, "%s", [NSString stringWithFormat:@"WARNING: " format "\n", ## __VA_ARGS__].UTF8String); fflush(stderr); })
 #define LOG_ERROR(format, ...) ({ fflush(stdout); fprintf(stderr, "%s", [NSString stringWithFormat:@"ERROR: " format "\n", ## __VA_ARGS__].UTF8String); fflush(stderr); })
@@ -942,7 +942,7 @@ int main(int argc, char* const argv[]) {
         if (!quiet) {
             printf("Creating video...\n");
         }
-        
+
         for (NSURL *file in imageFiles) {
             @autoreleasepool {
                 NSDate *creationDate;
