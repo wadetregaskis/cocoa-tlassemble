@@ -837,6 +837,10 @@ int main(int argc, char* const argv[]) {
         NSDate *earliestFrame, *latestFrame;
         NSMutableDictionary *fileCreationDates = (0 < speed) ? [NSMutableDictionary dictionary] : nil;
 
+        if (!quiet) {
+            printf("Scanning inputs to find input images...\n");
+        }
+
         for (int i = 0; i < argc - 1; ++i) {
             NSURL *inputPath = [NSURL fileURLWithPath:[@(argv[i]) stringByExpandingTildeInPath]];
 
@@ -935,6 +939,10 @@ int main(int argc, char* const argv[]) {
             exit(-1);
         }
 
+        if (!quiet) {
+            printf("Creating video...\n");
+        }
+        
         for (NSURL *file in imageFiles) {
             @autoreleasepool {
                 NSDate *creationDate;
