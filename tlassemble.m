@@ -1262,14 +1262,16 @@ int main(int argc, char* const argv[]) {
         if (movie) {
             dispatch_semaphore_t barrier = dispatch_semaphore_create(0);
 
-            [movie finishWritingWithCompletionHandler:^{
-                if (AVAssetWriterStatusCompleted != movie.status) {
-                    LOG_ERROR("Unable to complete movie: %@", movie.error.localizedDescription);
-                    exit(1);
-                }
+            dispatch_async(encodingQueue, ^{
+                [movie finishWritingWithCompletionHandler:^{
+                    if (AVAssetWriterStatusCompleted != movie.status) {
+                        LOG_ERROR("Unable to complete movie: %@", movie.error.localizedDescription);
+                        exit(1);
+                    }
 
-                dispatch_semaphore_signal(barrier);
-            }];
+                    dispatch_semaphore_signal(barrier);
+                }];
+            });
 
             dispatch_semaphore_wait(barrier, DISPATCH_TIME_FOREVER);
         }
