@@ -177,11 +177,14 @@ const char* NameOfAVAssetWriterStatus(AVAssetWriterStatus status) {
     }
 }
 
-typedef struct {
-    AVAssetWriter* __unsafe_unretained assetWriter;
-    AVAssetWriterInput* __unsafe_unretained assetWriterInput;
-    BOOL quiet;
-} FrameOutputContext;
+@interface FrameOutputContext : NSObject
+@property(readwrite) AVAssetWriter *assetWriter;
+@property(readwrite) AVAssetWriterInput *assetWriterInput;
+@property(readwrite) BOOL quiet;
+@end
+
+@implementation FrameOutputContext
+@end
 
 static void compressedFrameOutput(void *rawContext,
                                   void *frameNumber,
@@ -193,19 +196,19 @@ static void compressedFrameOutput(void *rawContext,
         exit(1);
     }
 
-    FrameOutputContext *context = (FrameOutputContext*)rawContext;
+    FrameOutputContext *context = (__bridge FrameOutputContext*)rawContext;
 
     if (context) {
-        if (context->assetWriterInput) {
-            if ([context->assetWriterInput appendSampleBuffer:sampleBuffer]) {
-                if (!context->quiet) {
+        if (context.assetWriterInput) {
+            if ([context.assetWriterInput appendSampleBuffer:sampleBuffer]) {
+                if (!context.quiet) {
                     printf("Completed frame #%"PRIuPTR".\n", (uintptr_t)frameNumber);
                 }
             } else {
                 LOG_ERROR("Unable to append compressed frame #%"PRIuPTR" to file, status = %s (%s).",
                           (uintptr_t)frameNumber,
-                          NameOfAVAssetWriterStatus(context->assetWriter.status),
-                          context->assetWriter.error.description.UTF8String);
+                          NameOfAVAssetWriterStatus(context.assetWriter.status),
+                          context.assetWriter.error.description.UTF8String);
                 exit(1);
             }
         }
@@ -929,7 +932,7 @@ int main(int argc, char* const argv[]) {
         DLOG(V_CONFIGURATION, @"Speed: %f", speed);
         DLOG(V_CONFIGURATION, @"Time value: %lld", timeValue);
 
-        FrameOutputContext frameOutputContext = {0};
+        FrameOutputContext *frameOutputContext = [FrameOutputContext new];
         NSDictionary *imageSourceOptions = @{ (__bridge NSString*)kCGImageSourceShouldAllowFloat: @YES };
 
         dispatch_queue_t encodingQueue = dispatch_queue_create("Encoding", DISPATCH_QUEUE_SERIAL);
@@ -1099,7 +1102,7 @@ int main(int argc, char* const argv[]) {
                                                                                      NULL, // TODO: Consider pre-defining a pixel buffer pool.  Though is this done automatically if we don't do it explicitly?
                                                                                      NULL,
                                                                                      compressedFrameOutput,
-                                                                                     &frameOutputContext,
+                                                                                     (void*)CFBridgingRetain(frameOutputContext),
                                                                                      &compressionSession);
                                         
                                         if (0 != status) {
@@ -1270,6 +1273,8 @@ int main(int argc, char* const argv[]) {
 
             dispatch_semaphore_wait(barrier, DISPATCH_TIME_FOREVER);
         }
+
+        CFRelease((__bridge CFTypeRef)frameOutputContext);
 
         if (0 < framesAddedSuccessfully) {
             if (framesAddedSuccessfully != imageFiles.count) {
