@@ -92,7 +92,7 @@ static const char* DescriptionOfCVReturn(CVReturn status) {
     }
 }
 
-static CVPixelBufferRef CreatePixelBufferFromCGImage(CGImageRef image, NSSize frameSize) {
+static CVPixelBufferRef CreatePixelBufferFromCGImage(CGImageRef image, NSSize frameSize, int orientation) {
     // I've seen the following two settings recommended, but I'm not sure why we'd bother overriding them?
     //NSDictionary *pixelBufferOptions = @{kCVPixelBufferCGImageCompatibilityKey: @NO,
     //                                     kCVPixelBufferCGBitmapContextCompatibilityKey, @NO};
@@ -123,9 +123,49 @@ static CVPixelBufferRef CreatePixelBufferFromCGImage(CGImageRef image, NSSize fr
                                                                  (CGBitmapInfo)kCGImageAlphaNoneSkipFirst); // + kCGBitmapByteOrder32Big?  Or 16Big?
 
                     if (context) {
-                        CGContextDrawImage(context,
-                                           CGRectMake(0, 0, frameSize.width, frameSize.height),
-                                           image);
+                        CGSize rotatedSize = frameSize;
+
+                        // TODO: Get some samples of these other orientations and make them work too.
+                        switch (orientation) {
+                            case 0: // Unspecified; means assume 1
+                            case 1: // "Top, left" - i.e. "normal", no-adjustments-needed rotation.
+                                break;
+                            case 2: // "Top, right"
+                                LOG_ERROR("Unsupported image orientation, \"Top, right\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
+                                break;
+                            case 3: // "Bottom, right"
+                                LOG_ERROR("Unsupported image orientation, \"Bottom, right\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
+                                break;
+                            case 4: // "Bottom, left"
+                                LOG_ERROR("Unsupported image orientation, \"Bottom, left\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
+                                break;
+                            case 5: // "Left, top"
+                                LOG_ERROR("Unsupported image orientation, \"Left, top\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
+                                break;
+                            case 6: // "Right, top"
+                                LOG_ERROR("Unsupported image orientation, \"Right, top\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
+                                break;
+                            case 7: // "Right, bottom"
+                                LOG_ERROR("Unsupported image orientation, \"Right, bottom\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
+                                break;
+                            case 8: // "Left, bottom"
+                                rotatedSize = CGSizeMake(frameSize.height, frameSize.width);
+                                CGContextTranslateCTM(context, rotatedSize.height / 2.0, rotatedSize.width / 2.0);
+                                CGContextRotateCTM(context, M_PI_2);
+                                CGContextTranslateCTM(context, -(rotatedSize.width / 2.0), -(rotatedSize.height / 2.0));
+                                break;
+                            default:
+                                LOG_WARNING("Unknown image rotation (%d) - leaving as is, which may mean the frame is not correctly oriented in the output video.", orientation);
+                                break;
+                        }
+
+                        if (kCVReturnSuccess == status) {
+                            CGContextDrawImage(context,
+                                               CGRectMake(0, 0, rotatedSize.width, rotatedSize.height),
+                                               image);
+
+                        }
+
                         CGContextRelease(context);
                     } else {
                         LOG_ERROR("Unable to create a new bitmap context around the pixel buffer.");
@@ -1003,26 +1043,31 @@ int main(int argc, char* const argv[]) {
                             CGImageRef image = CGImageSourceCreateImageAtIndex(imageSource, 0, (__bridge CFDictionaryRef)imageSourceOptions);
 
                             if (image) {
+                                const int orientation = ((NSNumber*)imageProperties[(__bridge NSString*)kCGImagePropertyOrientation]).intValue;
+                                const BOOL isRotated90Degrees = ((8 == orientation) || (7 == orientation) || (4 == orientation) || (3 == orientation));
+                                const size_t rotatedWidth = (isRotated90Degrees ? CGImageGetHeight(image) : CGImageGetWidth(image));
+                                const size_t rotatedHeight = (isRotated90Degrees ? CGImageGetWidth(image) : CGImageGetHeight(image));
+
                                 if ((0 != frameSize.width) && (0 != frameSize.height)) {
-                                    if (    (frameSize.width != CGImageGetWidth(image))
-                                         || (frameSize.height != CGImageGetHeight(image))) {
+                                    if (    (frameSize.width != rotatedWidth)
+                                         || (frameSize.height != rotatedHeight)) {
                                         LOG_WARNING("First frame (and thus output movie) has size %llu x %llu, but frame #%lu has size %zu x %zu.  The resulting movie may be deformed.\n",
                                                     (unsigned long long)frameSize.width,
                                                     (unsigned long long)frameSize.height,
                                                     fileIndex,
-                                                    CGImageGetWidth(image),
-                                                    CGImageGetHeight(image));
+                                                    rotatedWidth,
+                                                    rotatedHeight);
                                     }
                                 } else {
-                                    frameSize = NSMakeSize(CGImageGetWidth(image), CGImageGetHeight(image));
+                                    frameSize = NSMakeSize(rotatedWidth, rotatedHeight);
                                 }
 
                                 const long width = (height
-                                                    ? llround(height * ((double)CGImageGetWidth(image) / CGImageGetHeight(image)))
-                                                    : CGImageGetWidth(image));
+                                                    ? llround(height * ((double)rotatedWidth / rotatedHeight))
+                                                    : rotatedWidth);
 
                                 if (!height) {
-                                    height = CGImageGetHeight(image);
+                                    height = rotatedHeight;
                                 }
 
                                 const unsigned long kSafeHeightLimit = 2496;
@@ -1043,7 +1088,7 @@ int main(int argc, char* const argv[]) {
                                     }
                                 }
 
-                                CVPixelBufferRef pixelBuffer = CreatePixelBufferFromCGImage(image, NSMakeSize(width, height));
+                                CVPixelBufferRef pixelBuffer = CreatePixelBufferFromCGImage(image, NSMakeSize(width, height), orientation);
 
                                 if (pixelBuffer) {
                                     if (!compressionSession) {
