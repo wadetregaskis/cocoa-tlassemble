@@ -381,63 +381,83 @@ static BOOL determineBitsPerTimeInterval(double *bits, double *timeInterval, con
     }
 }
 
-void prescanFile(NSURL *file, const double speed, NSDate **earliestFrame, NSDate **latestFrame, NSMutableDictionary *fileCreationDates, NSMutableArray *imageFiles) {
-    BOOL fileLooksGood = YES;
+void prescanFile(NSURL *file,
+                 const double speed,
+                 NSDate **earliestFrame,
+                 NSDate **latestFrame,
+                 NSMutableDictionary *fileCreationDates,
+                 NSMutableArray *imageFiles,
+                 dispatch_semaphore_t concurrencyLimiter,
+                 dispatch_group_t group,
+                 dispatch_queue_t serialisationQueue) {
+    if (0 != dispatch_semaphore_wait(concurrencyLimiter, DISPATCH_TIME_FOREVER)) {
+        LOG_ERROR("Somehow timed out waiting for the prescan concurrency limiter semaphore, even though there was no timeout specified.  Going ahead blindly...");
+    }
 
-    if (0 < speed) {
-        // Unfortunately the file system's idea of creation date is often not very precise, nor accurate - some cameras (e.g. D7100) can end up creating files roughly simultaneously, despite the images of course being sequential (presumably as some kind of batching optimisation when emptying the in-camera image buffer).  So we try to get the actual recording time of the image out of the EXIF metadata, and only fall back to the file's creation date as a last resort.
+    dispatch_group_async(group, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        BOOL fileLooksGood = YES;
 
-        id creationDate;
-        NSError *err;
+        if (0 < speed) {
+            // Unfortunately the file system's idea of creation date is often not very precise, nor accurate - some cameras (e.g. D7100) can end up creating files roughly simultaneously, despite the images of course being sequential (presumably as some kind of batching optimisation when emptying the in-camera image buffer).  So we try to get the actual recording time of the image out of the EXIF metadata, and only fall back to the file's creation date as a last resort.
 
-        NSDictionary *imageSourceOptions = @{ (__bridge NSString*)kCGImageSourceShouldAllowFloat: @YES,
-                                              (__bridge NSString*)kCGImageSourceShouldCache: @NO,
-                                              (__bridge NSString*)kCGImageSourceCreateThumbnailFromImageIfAbsent: @NO,
-                                              (__bridge NSString*)kCGImageSourceCreateThumbnailFromImageAlways: @NO };
+            id creationDate;
+            NSError *err;
 
-        CGImageSourceRef imageSource = CGImageSourceCreateWithURL((__bridge CFURLRef)file, (__bridge CFDictionaryRef)imageSourceOptions);
+            NSDictionary *imageSourceOptions = @{ (__bridge NSString*)kCGImageSourceShouldAllowFloat: @YES,
+                                                  (__bridge NSString*)kCGImageSourceShouldCache: @NO,
+                                                  (__bridge NSString*)kCGImageSourceCreateThumbnailFromImageIfAbsent: @NO,
+                                                  (__bridge NSString*)kCGImageSourceCreateThumbnailFromImageAlways: @NO };
 
-        if (imageSource) {
-            NSDictionary *imageProperties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(imageSource, 0, (__bridge CFDictionaryRef)imageSourceOptions));
+            CGImageSourceRef imageSource = CGImageSourceCreateWithURL((__bridge CFURLRef)file, (__bridge CFDictionaryRef)imageSourceOptions);
 
-            if (imageProperties) {
-                NSDictionary *exifProperties = imageProperties[(__bridge NSString*)kCGImagePropertyExifDictionary];
+            if (imageSource) {
+                NSDictionary *imageProperties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(imageSource, 0, (__bridge CFDictionaryRef)imageSourceOptions));
 
-                if (exifProperties) {
-                    NSString *dateAsString = exifProperties[(__bridge NSString*)kCGImagePropertyExifDateTimeOriginal];
-                    DLOG(V_FRAME_METADATA, @"Raw creation date for \"%@\": %@", file.path, dateAsString);
-                    creationDate = [NSDate dateWithNaturalLanguageString:dateAsString];
+                if (imageProperties) {
+                    NSDictionary *exifProperties = imageProperties[(__bridge NSString*)kCGImagePropertyExifDictionary];
+
+                    if (exifProperties) {
+                        NSString *dateAsString = exifProperties[(__bridge NSString*)kCGImagePropertyExifDateTimeOriginal];
+                        DLOG(V_FRAME_METADATA, @"Raw creation date for \"%@\": %@", file.path, dateAsString);
+                        creationDate = [NSDate dateWithNaturalLanguageString:dateAsString];
+                    }
+                } else {
+                    LOG_ERROR("Unable to get image metadata for \"%@\".", file.path);
+                    fileLooksGood = NO;
                 }
+
+                CFRelease(imageSource);
             } else {
-                LOG_ERROR("Unable to get image metadata for \"%@\".", file.path);
+                LOG_ERROR("Unable to create an image source for \"%@\".", file.path);
                 fileLooksGood = NO;
             }
 
-            CFRelease(imageSource);
-        } else {
-            LOG_ERROR("Unable to create an image source for \"%@\".", file.path);
-            fileLooksGood = NO;
-        }
+            if (!creationDate) {
+                if (![file getResourceValue:&creationDate forKey:NSURLCreationDateKey error:&err]) {
+                    LOG_ERROR("Unable to determine the creation date of \"%@\".", file.path);
+                    fileLooksGood = NO;
+                }
+            }
 
-        if (!creationDate) {
-            if (![file getResourceValue:&creationDate forKey:NSURLCreationDateKey error:&err]) {
-                LOG_ERROR("Unable to determine the creation date of \"%@\".", file.path);
-                fileLooksGood = NO;
+            if (creationDate) {
+                dispatch_group_async(group, serialisationQueue, ^{
+                    DLOG(V_FRAME_METADATA, @"Creation date of \"%@\": %@", file.path, creationDate);
+                    fileCreationDates[file] = creationDate;
+
+                    *earliestFrame = (*earliestFrame ? [*earliestFrame earlierDate:creationDate] : creationDate);
+                    *latestFrame = (*latestFrame ? [*latestFrame laterDate:creationDate] : creationDate);
+                });
             }
         }
 
-        if (creationDate) {
-            DLOG(V_FRAME_METADATA, @"Creation date of \"%@\": %@", file.path, creationDate);
-            fileCreationDates[file] = creationDate;
-
-            *earliestFrame = (*earliestFrame ? [*earliestFrame earlierDate:creationDate] : creationDate);
-            *latestFrame = (*latestFrame ? [*latestFrame laterDate:creationDate] : creationDate);
+        if (fileLooksGood) {
+            dispatch_group_async(group, serialisationQueue, ^{
+                [imageFiles addObject:file];
+            });
         }
-    }
 
-    if (fileLooksGood) {
-        [imageFiles addObject:file];
-    }
+        dispatch_semaphore_signal(concurrencyLimiter);
+    });
 }
 
 int main(int argc, char* const argv[]) {
@@ -483,6 +503,7 @@ int main(int argc, char* const argv[]) {
         NSMutableDictionary *filter = [NSMutableDictionary dictionary];
         BOOL dryrun = NO;
         unsigned long long frameLimit = -1;
+        long ioConcurrencyLevel = 7; // Because.
 
         NSDictionary *sortComparators = @{
             @"name": ^(NSURL *a, NSURL *b) {
@@ -884,36 +905,47 @@ int main(int argc, char* const argv[]) {
             printf("Scanning inputs to find input images...\n");
         }
 
-        for (int i = 0; i < argc - 1; ++i) {
-            NSURL *inputPath = [NSURL fileURLWithPath:[@(argv[i]) stringByExpandingTildeInPath]];
+        {
+            dispatch_semaphore_t concurrencyLimiter = dispatch_semaphore_create(ioConcurrencyLevel);
+            dispatch_group_t prescanGroup = dispatch_group_create();
+            dispatch_queue_t serialisationQueue = dispatch_queue_create("Serialisation", DISPATCH_QUEUE_SERIAL);
 
-            DLOG(V_CONFIGURATION, @"Input Path: %@", inputPath);
+            for (int i = 0; i < argc - 1; ++i) {
+                NSURL *inputPath = [NSURL fileURLWithPath:[@(argv[i]) stringByExpandingTildeInPath]];
 
-            if (![fileManager fileExistsAtPath:inputPath.path isDirectory:&isDir]) {
-                LOG_ERROR("Input file/folder \"%@\" does not exist.", inputPath.path);
-                return EINVAL;
+                DLOG(V_CONFIGURATION, @"Input Path: %@", inputPath);
+
+                if (![fileManager fileExistsAtPath:inputPath.path isDirectory:&isDir]) {
+                    LOG_ERROR("Input file/folder \"%@\" does not exist.", inputPath.path);
+                    return EINVAL;
+                }
+
+                if (isDir) {
+                    NSDirectoryEnumerator *directoryEnumerator = [fileManager enumeratorAtURL:inputPath
+                                                                   includingPropertiesForKeys:filePropertyKeys
+                                                                                      options:(   NSDirectoryEnumerationSkipsHiddenFiles
+                                                                                                | NSDirectoryEnumerationSkipsPackageDescendants)
+                                                                                 errorHandler:^(NSURL *url, NSError *error) {
+                        LOG_ERROR("Error while looking for images in \"%@\": %@", url.path, error.localizedDescription);
+                        return YES;
+                    }];
+
+                    if (!directoryEnumerator) {
+                        LOG_ERROR("Unable to enumerate files in \"%@\".", inputPath.path);
+                        return -1;
+                    }
+
+                    for (NSURL *file in directoryEnumerator) {
+                        prescanFile(file, speed, &earliestFrame, &latestFrame, fileCreationDates, imageFiles, concurrencyLimiter, prescanGroup, serialisationQueue);
+                    }
+                } else {
+                    prescanFile(inputPath, speed, &earliestFrame, &latestFrame, fileCreationDates, imageFiles, concurrencyLimiter, prescanGroup, serialisationQueue);
+                }
             }
 
-            if (isDir) {
-                NSDirectoryEnumerator *directoryEnumerator = [fileManager enumeratorAtURL:inputPath
-                                                               includingPropertiesForKeys:filePropertyKeys
-                                                                                  options:(   NSDirectoryEnumerationSkipsHiddenFiles
-                                                                                            | NSDirectoryEnumerationSkipsPackageDescendants)
-                                                                             errorHandler:^(NSURL *url, NSError *error) {
-                    LOG_ERROR("Error while looking for images in \"%@\": %@", url.path, error.localizedDescription);
-                    return YES;
-                }];
-
-                if (!directoryEnumerator) {
-                    LOG_ERROR("Unable to enumerate files in \"%@\".", inputPath.path);
-                    return -1;
-                }
-
-                for (NSURL *file in directoryEnumerator) {
-                    prescanFile(file, speed, &earliestFrame, &latestFrame, fileCreationDates, imageFiles);
-                }
-            } else {
-                prescanFile(inputPath, speed, &earliestFrame, &latestFrame, fileCreationDates, imageFiles);
+            if (0 != dispatch_group_wait(prescanGroup, DISPATCH_TIME_FOREVER)) {
+                LOG_ERROR("Prescan dispatch group somehow timed out waiting for completion.");
+                return 1;
             }
         }
 
