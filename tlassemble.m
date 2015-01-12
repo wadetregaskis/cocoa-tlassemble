@@ -451,7 +451,7 @@ void prescanFile(NSURL *file,
         }
 
         if (fileLooksGood) {
-            dispatch_group_async(group, serialisationQueue, ^{
+            dispatch_async(serialisationQueue, ^{
                 [imageFiles addObject:file];
             });
         }
@@ -947,6 +947,9 @@ int main(int argc, char* const argv[]) {
                 LOG_ERROR("Prescan dispatch group somehow timed out waiting for completion.");
                 return 1;
             }
+
+            // Make sure all the prescan's results are actually done (since completing prescanGroup just covers that initial, concurrent file scans - not the actual blocks sent to serialisationQueue that actually insert the results into imageFiles.
+            dispatch_barrier_sync(serialisationQueue, ^{});
         }
 
         if (0 == imageFiles.count) {
