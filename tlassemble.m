@@ -543,6 +543,9 @@ int main(int argc, char* const argv[]) {
             concurrencyLimit = 4;
         }
 
+        // Has to be here so it can be referenced in the creation-time sort comparator, below.  Also, needs to be __block so that it's refered to by reference, and will thus see modifications (i.e. when it's created later on, if necessary).  As opposed to the default behaviour, for non-__block variables, which is to copy their current value at the time the block is created.
+        __block NSMutableDictionary *fileCreationDates;
+
         NSDictionary *sortComparators = @{
             @"name": ^(NSURL *a, NSURL *b) {
                 return [(reverseOrder ? b : a).lastPathComponent compare:(reverseOrder ? a : b).lastPathComponent
@@ -553,13 +556,13 @@ int main(int argc, char* const argv[]) {
                                                                            | NSForcedOrderingSearch)];
             },
             @"creation": ^(NSURL *a, NSURL *b) {
-                id aCreationDate = nil, bCreationDate = nil;
+                id aCreationDate = fileCreationDates[a], bCreationDate = fileCreationDates[b];
                 NSError *err = nil;
 
-                if (![a getResourceValue:&aCreationDate forKey:NSURLCreationDateKey error:&err]) {
+                if (!aCreationDate && ![a getResourceValue:&aCreationDate forKey:NSURLCreationDateKey error:&err]) {
                     LOG_ERROR("Unable to determine the creation date of \"%@\".", a.path);
                     return (reverseOrder ? NSOrderedAscending : NSOrderedDescending);
-                } else if (![b getResourceValue:&bCreationDate forKey:NSURLCreationDateKey error:&err]) {
+                } else if (!bCreationDate && ![b getResourceValue:&bCreationDate forKey:NSURLCreationDateKey error:&err]) {
                     LOG_ERROR("Unable to determine the creation date of \"%@\".", b.path);
                     return (reverseOrder ? NSOrderedDescending : NSOrderedAscending);
                 } else {
@@ -571,6 +574,11 @@ int main(int argc, char* const argv[]) {
                          ((NSOrderedSame == result) ? '=' : ((NSOrderedAscending == result) ? '<' : '>')),
                          b,
                          bCreationDate);
+
+                    if (NSOrderedSame == result) {
+                        LOG_WARNING(@"\"%@\" and \"%@\" have the same creation date - %@ - and so their true order cannot be discerned.  They'll be ordered arbitrarily with respect to each other.", a, b, aCreationDate);
+                    }
+
                     return result;
                 }
             }
@@ -941,11 +949,12 @@ int main(int argc, char* const argv[]) {
             if (![filePropertyKeys containsObject:NSURLCreationDateKey]) {
                 [filePropertyKeys addObject:NSURLCreationDateKey];
             }
+
+            fileCreationDates = [NSMutableDictionary dictionary];
         }
 
         NSMutableArray *imageFiles = [NSMutableArray array];
         NSDate *earliestFrame, *latestFrame;
-        NSMutableDictionary *fileCreationDates = (0 < speed) ? [NSMutableDictionary dictionary] : nil;
 
         if (!quiet) {
             printf("Scanning inputs to find input images...\n");
