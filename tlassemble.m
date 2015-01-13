@@ -30,6 +30,8 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/types.h>
+#include <sys/sysctl.h>
 
 #import <AppKit/AppKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -94,112 +96,128 @@ static const char* DescriptionOfCVReturn(CVReturn status) {
     }
 }
 
-static CVPixelBufferRef CreatePixelBufferFromCGImage(CGImageRef image, NSSize frameSize, int orientation) {
-    // I've seen the following two settings recommended, but I'm not sure why we'd bother overriding them?
-    //NSDictionary *pixelBufferOptions = @{kCVPixelBufferCGImageCompatibilityKey: @NO,
-    //                                     kCVPixelBufferCGBitmapContextCompatibilityKey, @NO};
-    CVPixelBufferRef pixelBuffer = NULL;
-    CVReturn status = CVPixelBufferCreate(kCFAllocatorDefault,
-                                          frameSize.width,
-                                          frameSize.height,
-                                          kCVPixelFormatType_32ARGB,
-                                          NULL,
-                                          &pixelBuffer);
+static void CreatePixelBufferFromCGImage(CGImageRef image,
+                                         NSSize frameSize,
+                                         int orientation,
+                                         dispatch_semaphore_t concurrencyLimiter,
+                                         dispatch_group_t group,
+                                         dispatch_queue_t outputQueue,
+                                         void (^outputBlock)(CVPixelBufferRef pixelBuffer)) {
+    if (0 != dispatch_semaphore_wait(concurrencyLimiter, DISPATCH_TIME_FOREVER)) {
+        LOG_ERROR("Somehow timed out waiting for the image rendering concurrency limiter semaphore, even though there was no timeout specified.  Going ahead blindly...");
+    }
 
-    if (kCVReturnSuccess == status) {
-        status = CVPixelBufferLockBaseAddress(pixelBuffer, 0);
+    dispatch_group_async(group, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        // I've seen the following two settings recommended, but I'm not sure why we'd bother overriding them?
+        //NSDictionary *pixelBufferOptions = @{kCVPixelBufferCGImageCompatibilityKey: @NO,
+        //                                     kCVPixelBufferCGBitmapContextCompatibilityKey, @NO};
+        CVPixelBufferRef pixelBuffer = NULL;
+        CVReturn status = CVPixelBufferCreate(kCFAllocatorDefault,
+                                              frameSize.width,
+                                              frameSize.height,
+                                              kCVPixelFormatType_32ARGB,
+                                              NULL,
+                                              &pixelBuffer);
 
         if (kCVReturnSuccess == status) {
-            void *data = CVPixelBufferGetBaseAddress(pixelBuffer);
+            status = CVPixelBufferLockBaseAddress(pixelBuffer, 0);
 
-            if (data) {
-                CGColorSpaceRef colourSpace = CGColorSpaceCreateDeviceRGB();
+            if (kCVReturnSuccess == status) {
+                void *data = CVPixelBufferGetBaseAddress(pixelBuffer);
 
-                if (colourSpace) {
-                    CGContextRef context = CGBitmapContextCreate(data,
-                                                                 frameSize.width,
-                                                                 frameSize.height,
-                                                                 8, // Bits per component
-                                                                 CVPixelBufferGetBytesPerRow(pixelBuffer),
-                                                                 colourSpace,
-                                                                 (CGBitmapInfo)kCGImageAlphaNoneSkipFirst); // + kCGBitmapByteOrder32Big?  Or 16Big?
+                if (data) {
+                    CGColorSpaceRef colourSpace = CGColorSpaceCreateDeviceRGB();
 
-                    if (context) {
-                        CGSize rotatedSize = frameSize;
+                    if (colourSpace) {
+                        CGContextRef context = CGBitmapContextCreate(data,
+                                                                     frameSize.width,
+                                                                     frameSize.height,
+                                                                     8, // Bits per component
+                                                                     CVPixelBufferGetBytesPerRow(pixelBuffer),
+                                                                     colourSpace,
+                                                                     (CGBitmapInfo)kCGImageAlphaNoneSkipFirst); // + kCGBitmapByteOrder32Big?  Or 16Big?
 
-                        // TODO: Get some samples of these other orientations and make them work too.
-                        switch (orientation) {
-                            case 0: // Unspecified; means assume 1
-                            case 1: // "Top, left" - i.e. "normal", no-adjustments-needed rotation.
-                                break;
-                            case 2: // "Top, right"
-                                LOG_ERROR("Unsupported image orientation, \"Top, right\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
-                                break;
-                            case 3: // "Bottom, right"
-                                LOG_ERROR("Unsupported image orientation, \"Bottom, right\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
-                                break;
-                            case 4: // "Bottom, left"
-                                LOG_ERROR("Unsupported image orientation, \"Bottom, left\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
-                                break;
-                            case 5: // "Left, top"
-                                LOG_ERROR("Unsupported image orientation, \"Left, top\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
-                                break;
-                            case 6: // "Right, top"
-                                LOG_ERROR("Unsupported image orientation, \"Right, top\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
-                                break;
-                            case 7: // "Right, bottom"
-                                LOG_ERROR("Unsupported image orientation, \"Right, bottom\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
-                                break;
-                            case 8: // "Left, bottom"
-                                rotatedSize = CGSizeMake(frameSize.height, frameSize.width);
-                                CGContextTranslateCTM(context, rotatedSize.height / 2.0, rotatedSize.width / 2.0);
-                                CGContextRotateCTM(context, M_PI_2);
-                                CGContextTranslateCTM(context, -(rotatedSize.width / 2.0), -(rotatedSize.height / 2.0));
-                                break;
-                            default:
-                                LOG_WARNING("Unknown image rotation (%d) - leaving as is, which may mean the frame is not correctly oriented in the output video.", orientation);
-                                break;
+                        if (context) {
+                            CGSize rotatedSize = frameSize;
+
+                            // TODO: Get some samples of these other orientations and make them work too.
+                            switch (orientation) {
+                                case 0: // Unspecified; means assume 1
+                                case 1: // "Top, left" - i.e. "normal", no-adjustments-needed rotation.
+                                    break;
+                                case 2: // "Top, right"
+                                    LOG_ERROR("Unsupported image orientation, \"Top, right\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
+                                    break;
+                                case 3: // "Bottom, right"
+                                    LOG_ERROR("Unsupported image orientation, \"Bottom, right\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
+                                    break;
+                                case 4: // "Bottom, left"
+                                    LOG_ERROR("Unsupported image orientation, \"Bottom, left\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
+                                    break;
+                                case 5: // "Left, top"
+                                    LOG_ERROR("Unsupported image orientation, \"Left, top\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
+                                    break;
+                                case 6: // "Right, top"
+                                    LOG_ERROR("Unsupported image orientation, \"Right, top\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
+                                    break;
+                                case 7: // "Right, bottom"
+                                    LOG_ERROR("Unsupported image orientation, \"Right, bottom\".  This frame may be drawn with incorrect rotation, mirroring, and/or proportions.");
+                                    break;
+                                case 8: // "Left, bottom"
+                                    rotatedSize = CGSizeMake(frameSize.height, frameSize.width);
+                                    CGContextTranslateCTM(context, rotatedSize.height / 2.0, rotatedSize.width / 2.0);
+                                    CGContextRotateCTM(context, M_PI_2);
+                                    CGContextTranslateCTM(context, -(rotatedSize.width / 2.0), -(rotatedSize.height / 2.0));
+                                    break;
+                                default:
+                                    LOG_WARNING("Unknown image rotation (%d) - leaving as is, which may mean the frame is not correctly oriented in the output video.", orientation);
+                                    break;
+                            }
+
+                            if (kCVReturnSuccess == status) {
+                                CGContextDrawImage(context,
+                                                   CGRectMake(0, 0, rotatedSize.width, rotatedSize.height),
+                                                   image);
+
+                            }
+
+                            CGContextRelease(context);
+                        } else {
+                            LOG_ERROR("Unable to create a new bitmap context around the pixel buffer.");
+                            status = kCVReturnError;
                         }
 
-                        if (kCVReturnSuccess == status) {
-                            CGContextDrawImage(context,
-                                               CGRectMake(0, 0, rotatedSize.width, rotatedSize.height),
-                                               image);
-
-                        }
-
-                        CGContextRelease(context);
+                        CGColorSpaceRelease(colourSpace);
                     } else {
-                        LOG_ERROR("Unable to create a new bitmap context around the pixel buffer.");
-                        status = kCVReturnError;
+                        LOG_ERROR("Unable to create a device RGB colour space.");
                     }
-
-                    CGColorSpaceRelease(colourSpace);
                 } else {
-                    LOG_ERROR("Unable to create a device RGB colour space.");
+                    LOG_ERROR("Unable to get a raw pointer to the pixel buffer.");
+                    status = kCVReturnError;
+                }
+
+                const CVReturn nonFatalStatus = CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
+
+                if (kCVReturnSuccess != nonFatalStatus) {
+                    LOG_WARNING("Unable to unlock pixel buffer, error #%d: %s", nonFatalStatus, DescriptionOfCVReturn(nonFatalStatus));
                 }
             } else {
-                LOG_ERROR("Unable to get a raw pointer to the pixel buffer.");
-                status = kCVReturnError;
-            }
-
-            const CVReturn nonFatalStatus = CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
-
-            if (kCVReturnSuccess != nonFatalStatus) {
-                LOG_WARNING("Unable to unlock pixel buffer, error #%d: %s", nonFatalStatus, DescriptionOfCVReturn(nonFatalStatus));
+                LOG_ERROR("Unable to lock pixel buffer, error #%d: %s", status, DescriptionOfCVReturn(status));
             }
         } else {
-            LOG_ERROR("Unable to lock pixel buffer, error #%d: %s", status, DescriptionOfCVReturn(status));
+            LOG_ERROR("Unable to create a pixel buffer, error #%d: %s", status, DescriptionOfCVReturn(status));
         }
-    } else {
-        LOG_ERROR("Unable to create a pixel buffer, error #%d: %s", status, DescriptionOfCVReturn(status));
-    }
 
-    if (kCVReturnSuccess != status) {
-        CVPixelBufferRelease(pixelBuffer), pixelBuffer = NULL;
-    }
+        if (kCVReturnSuccess != status) {
+            CVPixelBufferRelease(pixelBuffer), pixelBuffer = NULL;
+        }
 
-    return pixelBuffer;
+        dispatch_group_async(group, outputQueue, ^{
+            outputBlock(pixelBuffer);
+        });
+
+        dispatch_semaphore_signal(concurrencyLimiter);
+    });
 }
 
 const char* NameOfAVAssetWriterStatus(AVAssetWriterStatus status) {
@@ -462,6 +480,18 @@ void prescanFile(NSURL *file,
     });
 }
 
+@interface RenderedFrame : NSObject
+@property(readwrite) CVPixelBufferRef pixelBuffer;
+@property(readwrite) NSURL *file;
+@property(readwrite) unsigned long fileIndex;
+@property(readwrite) unsigned long frameIndex;
+@property(readwrite) CMTime frameTime;
+@property(readwrite) NSDate *creationDate;
+@end
+
+@implementation RenderedFrame
+@end
+
 int main(int argc, char* const argv[]) {
     @autoreleasepool {
         static const struct option longOptions[] = {
@@ -505,7 +535,13 @@ int main(int argc, char* const argv[]) {
         NSMutableDictionary *filter = [NSMutableDictionary dictionary];
         BOOL dryrun = NO;
         unsigned long long frameLimit = -1;
-        long ioConcurrencyLevel = 7; // Because.
+        long concurrencyLimit;
+        size_t concurrencyLimitSize = sizeof(concurrencyLimit);
+
+        if (0 != sysctlbyname("hw.logicalcpu", &concurrencyLimit, &concurrencyLimitSize, NULL, 0)) {
+            LOG_WARNING(@"Unable to determine how many logical cores this Mac contains, in order to optimise the level of concurrency.  Making a conservative assumption instead.");
+            concurrencyLimit = 4;
+        }
 
         NSDictionary *sortComparators = @{
             @"name": ^(NSURL *a, NSURL *b) {
@@ -915,10 +951,27 @@ int main(int argc, char* const argv[]) {
             printf("Scanning inputs to find input images...\n");
         }
 
+        dispatch_semaphore_t concurrencyLimiter = dispatch_semaphore_create(concurrencyLimit);
+
+        if (!concurrencyLimiter) {
+            LOG_ERROR("Unable to create image rendering concurrency limiter semaphore.");
+            exit(-1);
+        }
+
         {
-            dispatch_semaphore_t concurrencyLimiter = dispatch_semaphore_create(ioConcurrencyLevel);
             dispatch_group_t prescanGroup = dispatch_group_create();
-            dispatch_queue_t serialisationQueue = dispatch_queue_create("Serialisation", DISPATCH_QUEUE_SERIAL);
+
+            if (!prescanGroup) {
+                LOG_ERROR("Unable to create prescan group.");
+                exit(-1);
+            }
+
+            dispatch_queue_t serialisationQueue = dispatch_queue_create("Prescan Serialisation", DISPATCH_QUEUE_SERIAL);
+
+            if (!serialisationQueue) {
+                LOG_ERROR("Unable to create prescan serialisation queue.");
+                exit(-1);
+            }
 
             for (int i = 0; i < argc - 1; ++i) {
                 NSURL *inputPath = [NSURL fileURLWithPath:[@(argv[i]) stringByExpandingTildeInPath]];
@@ -1003,6 +1056,8 @@ int main(int argc, char* const argv[]) {
         const double expectedMovieDuration = ((0 < speed) ? (realTimeDuration / speed): imageFiles.count / fps);
         unsigned long fileIndex = 1;  // Human-readable, so 1-based.
         unsigned long framesFilteredOut = 0;
+        unsigned long frameIndex = 0;
+        __block unsigned long indexOfNextFrameToEncode = 0;
         __block unsigned long framesAddedSuccessfully = 0;
         NSSize frameSize = {0, 0};
 
@@ -1020,6 +1075,13 @@ int main(int argc, char* const argv[]) {
         FrameOutputContext *frameOutputContext = [FrameOutputContext new];
         NSDictionary *imageSourceOptions = @{ (__bridge NSString*)kCGImageSourceShouldAllowFloat: @YES };
 
+        dispatch_group_t renderGroup = dispatch_group_create();
+
+        if (!renderGroup) {
+            LOG_ERROR("Unable to create render group.");
+            exit(-1);
+        }
+
         dispatch_queue_t encodingQueue = dispatch_queue_create("Encoding", DISPATCH_QUEUE_SERIAL);
 
         if (!encodingQueue) {
@@ -1027,11 +1089,15 @@ int main(int argc, char* const argv[]) {
             exit(-1);
         }
 
+        __block NSMutableDictionary *framesRenderedOutOfOrder = [NSMutableDictionary new];
+
         if (!quiet) {
             printf("Creating video...\n");
         }
 
         for (NSURL *file in imageFiles) {
+            DLOG(V_FRAME_EVENTS, "Frame %lu: %@", frameIndex, file.path);
+
             @autoreleasepool {
                 NSDate *creationDate;
 
@@ -1133,187 +1199,215 @@ int main(int argc, char* const argv[]) {
                                     }
                                 }
 
-                                CVPixelBufferRef pixelBuffer = CreatePixelBufferFromCGImage(image, NSMakeSize(width, height), orientation);
+                                if (!compressionSession) {
+                                    // Now that we have our exemplar frame, we can create the asset writer.  We have to wait until now to do this because the asset writer, in pass-through mode, needs to know some basic info about the compressed frames it'll be receiving (i.e. size for a start).
 
-                                if (pixelBuffer) {
-                                    if (!compressionSession) {
-                                        // Now that we have our exemplar frame, we can create the asset writer.  We have to wait until now to do this because the asset writer, in pass-through mode, needs to know some basic info about the compressed frames it'll be receiving (i.e. size for a start).
-
-                                        {
-                                            CMVideoFormatDescriptionRef videoFormatDescription = NULL;
-                                            OSStatus status = CMVideoFormatDescriptionCreate(kCFAllocatorDefault,
-                                                                                             codec,
-                                                                                             width,
-                                                                                             height,
-                                                                                             NULL,
-                                                                                             &videoFormatDescription);
-
-                                            if (0 != status) {
-                                                LOG_ERROR("Unable to create video format description hint, error #%d.", status);
-                                                return 1;
-                                            }
-
-                                            movieWriter = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo
-                                                                                             outputSettings:nil
-                                                                                           sourceFormatHint:videoFormatDescription];
-
-                                            CFRelease(videoFormatDescription);
-                                        }
-
-                                        if (!movieWriter) {
-                                            LOG_ERROR("Unable to initialize AVAssetWriterInput.");
-                                            return 1;
-                                        }
-
-                                        movieWriter.expectsMediaDataInRealTime = NO;
-
-                                        [movie addInput:movieWriter];
-
-                                        if (![movie startWriting]) {
-                                            LOG_ERROR("Unable to start writing movie file: %@", movie.error.localizedDescription);
-                                            return 1;
-                                        }
-                                        
-                                        [movie startSessionAtSourceTime:CMTimeMake(0, timeScale)];
-
-                                        // Now create the actual compression session to do the real work and output the result to the asset writer we just created.
-
-                                        frameOutputContext.assetWriter = movie;
-                                        frameOutputContext.assetWriterInput = movieWriter;
-                                        frameOutputContext.quiet = quiet;
-
-                                        OSStatus status = VTCompressionSessionCreate(NULL,
-                                                                                     width,
-                                                                                     height,
-                                                                                     codec,
-                                                                                     (encoderID
-                                                                                      ? (__bridge CFDictionaryRef)@{(__bridge NSString*)kVTVideoEncoderSpecification_EncoderID: encoderID}
-                                                                                      : nil),
-                                                                                     NULL, // TODO: Consider pre-defining a pixel buffer pool.  Though is this done automatically if we don't do it explicitly?
-                                                                                     NULL,
-                                                                                     compressedFrameOutput,
-                                                                                     (void*)CFBridgingRetain(frameOutputContext),
-                                                                                     &compressionSession);
-                                        
-                                        if (0 != status) {
-                                            LOG_ERROR("Unable to create compression session, error #%d.", status);
-                                            return 1;
-                                        }
-
-                                        CFDictionaryRef supportedPropertyInfo = NULL;
-                                        status = VTSessionCopySupportedPropertyDictionary(compressionSession, &supportedPropertyInfo);
+                                    {
+                                        CMVideoFormatDescriptionRef videoFormatDescription = NULL;
+                                        OSStatus status = CMVideoFormatDescriptionCreate(kCFAllocatorDefault,
+                                                                                         codec,
+                                                                                         width,
+                                                                                         height,
+                                                                                         NULL,
+                                                                                         &videoFormatDescription);
 
                                         if (0 != status) {
-                                            LOG_WARNING("Unable to determine supported compression properties, error #%d.  Will try setting them blindly, but this is likely to fail.", status);
-                                        }
-
-                                        DLOG(V_CONFIGURATION_OPTIONS, @"Tweakable compression settings: %@", supportedPropertyInfo);
-
-                                        NSSet *supportedProperties = [NSSet setWithArray:((NSDictionary*)CFBridgingRelease(supportedPropertyInfo)).allKeys];
-                                        NSSet *specifiedProperties = [NSSet setWithArray:compressionSettings.allKeys];
-
-                                        if (![specifiedProperties isSubsetOfSet:supportedProperties]) {
-                                            NSMutableSet *unsupportedProperties = specifiedProperties.mutableCopy;
-                                            [unsupportedProperties minusSet:supportedProperties];
-
-                                            LOG_WARNING("The following compression properties are not supported in this configuration, and will be ignored:");
-
-                                            for (NSString *property in unsupportedProperties) {
-                                                LOG_WARNING("    %@", property);
-                                                [compressionSettings removeObjectForKey:property];
-                                            }
-                                        }
-
-                                        // Use of a H.264-specific default profile setting is questionable, but at time of writing it appears that the H.264 codec is the only one that supports that property anyway, so it doesn't actually cause any practical problems.
-                                        NSDictionary *defaultCompressionSettings = @{(__bridge NSString*)kVTCompressionPropertyKey_RealTime: @(NO),
-                                                                                     (__bridge NSString*)kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: @(YES),
-                                                                                     (__bridge NSString*)kVTCompressionPropertyKey_ExpectedFrameRate: @(fps),
-                                                                                     (__bridge NSString*)kVTCompressionPropertyKey_H264EntropyMode: (__bridge NSString*)kVTH264EntropyMode_CABAC,
-                                                                                     (__bridge NSString*)kVTCompressionPropertyKey_ProfileLevel: (__bridge NSString*)kVTProfileLevel_H264_High_AutoLevel,
-                                                                                     (__bridge NSString*)kVTCompressionPropertyKey_ExpectedDuration: @(expectedMovieDuration)};
-
-                                        NSMutableSet *applicableDefaultPropertyKeys = [NSMutableSet setWithArray:defaultCompressionSettings.allKeys];
-                                        [applicableDefaultPropertyKeys minusSet:specifiedProperties];
-                                        [applicableDefaultPropertyKeys intersectSet:supportedProperties];
-
-                                        for (NSString *key in applicableDefaultPropertyKeys) {
-                                            compressionSettings[key] = defaultCompressionSettings[key];
-                                        }
-
-                                        status = VTSessionSetProperties(compressionSession, (__bridge CFDictionaryRef)compressionSettings);
-
-                                        if (0 != status) {
-                                            LOG_ERROR("Unable to set compression properties, error #%d, to: %@", status, compressionSettings.description);
+                                            LOG_ERROR("Unable to create video format description hint, error #%d.", status);
                                             return 1;
                                         }
 
-                                        DLOG(V_CONFIGURATION, @"Applied compression settings: %@", compressionSettings);
+                                        movieWriter = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo
+                                                                                         outputSettings:nil
+                                                                                       sourceFormatHint:videoFormatDescription];
 
-                                        status = VTCompressionSessionPrepareToEncodeFrames(compressionSession);
-
-                                        if (0 != status) {
-                                            LOG_ERROR("Unable to prepare compression session, error #%d.", status);
-                                            return 1;
-                                        }
-
+                                        CFRelease(videoFormatDescription);
                                     }
 
-                                    const CMTime frameTime = (0 < speed) ? CMTimeMakeWithSeconds([creationDate timeIntervalSinceDate:earliestFrame] / speed, timeScale)
-                                                                         : CMTimeMake(framesAddedSuccessfully * timeValue, timeScale);
+                                    if (!movieWriter) {
+                                        LOG_ERROR("Unable to initialize AVAssetWriterInput.");
+                                        return 1;
+                                    }
 
-                                    DLOG(V_FRAME_METADATA,
-                                         @"Compressing frame %lu of %lu with movie time %f (of %f) [%"PRId64" / %"PRId32" - %"PRIx32", based on date of %@ vs earliest frame's date %@, which is a difference of %f, then divided by speed of %f to give %f, then multiplied by the time scale of %"PRId32"]...",
-                                         fileIndex,
-                                         imageFiles.count,
-                                         CMTimeGetSeconds(frameTime),
-                                         expectedMovieDuration,
-                                         frameTime.value,
-                                         frameTime.timescale,
-                                         frameTime.flags,
-                                         creationDate,
-                                         earliestFrame,
-                                         [creationDate timeIntervalSinceDate:earliestFrame],
-                                         speed,
-                                         ([creationDate timeIntervalSinceDate:earliestFrame] / speed),
-                                         timeScale);
+                                    movieWriter.expectsMediaDataInRealTime = NO;
 
-                                    dispatch_async(encodingQueue, ^{
-                                        OSStatus status = VTCompressionSessionEncodeFrame(compressionSession,
-                                                                                          pixelBuffer,
-                                                                                          frameTime,
-                                                                                          kCMTimeInvalid,
-                                                                                          NULL, // TODO: Investigate per-frame properties.
-                                                                                          (void*)(framesAddedSuccessfully + 1),
-                                                                                          NULL); // TODO: Check if any of these flags are useful.
-                                        if (0 == status) {
-#if 1
-                                            if (compressionSession) {
-                                                status = VTCompressionSessionCompleteFrames(compressionSession, kCMTimePositiveInfinity);
+                                    [movie addInput:movieWriter];
 
-                                                if (0 != status) {
-                                                    LOG_WARNING("Unable to complete compression session, error #%d.", status);
-                                                    // TODO: Maybe abort encoding completely?
-                                                }
-                                            }
-#endif
+                                    if (![movie startWriting]) {
+                                        LOG_ERROR("Unable to start writing movie file: %@", movie.error.localizedDescription);
+                                        return 1;
+                                    }
 
-                                            ++framesAddedSuccessfully;
+                                    [movie startSessionAtSourceTime:CMTimeMake(0, timeScale)];
 
-                                            if (!quiet) {
-                                                printf("Processed %s (%lu of %lu)\n", file.path.UTF8String, fileIndex, imageFiles.count);
-                                            }
-                                        } else {
-                                            LOG_ERROR("Unable to compress frame from \"%@\" (%lu of %lu), error #%d.", file.path, fileIndex, imageFiles.count, status);
+                                    // Now create the actual compression session to do the real work and output the result to the asset writer we just created.
+
+                                    frameOutputContext.assetWriter = movie;
+                                    frameOutputContext.assetWriterInput = movieWriter;
+                                    frameOutputContext.quiet = quiet;
+
+                                    OSStatus status = VTCompressionSessionCreate(NULL,
+                                                                                 width,
+                                                                                 height,
+                                                                                 codec,
+                                                                                 (encoderID
+                                                                                  ? (__bridge CFDictionaryRef)@{(__bridge NSString*)kVTVideoEncoderSpecification_EncoderID: encoderID}
+                                                                                  : nil),
+                                                                                 NULL, // TODO: Consider pre-defining a pixel buffer pool.  Though is this done automatically if we don't do it explicitly?
+                                                                                 NULL,
+                                                                                 compressedFrameOutput,
+                                                                                 (void*)CFBridgingRetain(frameOutputContext),
+                                                                                 &compressionSession);
+
+                                    if (0 != status) {
+                                        LOG_ERROR("Unable to create compression session, error #%d.", status);
+                                        return 1;
+                                    }
+
+                                    CFDictionaryRef supportedPropertyInfo = NULL;
+                                    status = VTSessionCopySupportedPropertyDictionary(compressionSession, &supportedPropertyInfo);
+
+                                    if (0 != status) {
+                                        LOG_WARNING("Unable to determine supported compression properties, error #%d.  Will try setting them blindly, but this is likely to fail.", status);
+                                    }
+
+                                    DLOG(V_CONFIGURATION_OPTIONS, @"Tweakable compression settings: %@", supportedPropertyInfo);
+
+                                    NSSet *supportedProperties = [NSSet setWithArray:((NSDictionary*)CFBridgingRelease(supportedPropertyInfo)).allKeys];
+                                    NSSet *specifiedProperties = [NSSet setWithArray:compressionSettings.allKeys];
+
+                                    if (![specifiedProperties isSubsetOfSet:supportedProperties]) {
+                                        NSMutableSet *unsupportedProperties = specifiedProperties.mutableCopy;
+                                        [unsupportedProperties minusSet:supportedProperties];
+
+                                        LOG_WARNING("The following compression properties are not supported in this configuration, and will be ignored:");
+
+                                        for (NSString *property in unsupportedProperties) {
+                                            LOG_WARNING("    %@", property);
+                                            [compressionSettings removeObjectForKey:property];
                                         }
+                                    }
 
-                                        CVPixelBufferRelease(pixelBuffer);
-                                    });
-                                } else {
-                                    LOG_ERROR("Unable to create pixel buffer from \"%@\" (%lu of %lu).", file.path, fileIndex, imageFiles.count);
-                                    return 1;
+                                    // Use of a H.264-specific default profile setting is questionable, but at time of writing it appears that the H.264 codec is the only one that supports that property anyway, so it doesn't actually cause any practical problems.
+                                    NSDictionary *defaultCompressionSettings = @{(__bridge NSString*)kVTCompressionPropertyKey_RealTime: @(NO),
+                                                                                 (__bridge NSString*)kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: @(YES),
+                                                                                 (__bridge NSString*)kVTCompressionPropertyKey_ExpectedFrameRate: @(fps),
+                                                                                 (__bridge NSString*)kVTCompressionPropertyKey_H264EntropyMode: (__bridge NSString*)kVTH264EntropyMode_CABAC,
+                                                                                 (__bridge NSString*)kVTCompressionPropertyKey_ProfileLevel: (__bridge NSString*)kVTProfileLevel_H264_High_AutoLevel,
+                                                                                 (__bridge NSString*)kVTCompressionPropertyKey_ExpectedDuration: @(expectedMovieDuration)};
+
+                                    NSMutableSet *applicableDefaultPropertyKeys = [NSMutableSet setWithArray:defaultCompressionSettings.allKeys];
+                                    [applicableDefaultPropertyKeys minusSet:specifiedProperties];
+                                    [applicableDefaultPropertyKeys intersectSet:supportedProperties];
+
+                                    for (NSString *key in applicableDefaultPropertyKeys) {
+                                        compressionSettings[key] = defaultCompressionSettings[key];
+                                    }
+
+                                    status = VTSessionSetProperties(compressionSession, (__bridge CFDictionaryRef)compressionSettings);
+
+                                    if (0 != status) {
+                                        LOG_ERROR("Unable to set compression properties, error #%d, to: %@", status, compressionSettings.description);
+                                        return 1;
+                                    }
+
+                                    DLOG(V_CONFIGURATION, @"Applied compression settings: %@", compressionSettings);
+
+                                    status = VTCompressionSessionPrepareToEncodeFrames(compressionSession);
+
+                                    if (0 != status) {
+                                        LOG_ERROR("Unable to prepare compression session, error #%d.", status);
+                                        return 1;
+                                    }
                                 }
 
-                                CGImageRelease(image);
+                                const void (^encodeFrame)(RenderedFrame *frame) = ^(RenderedFrame *frame) {
+                                    DLOG(V_FRAME_EVENTS,
+                                         @"Compressing frame %lu of %lu with movie time %f (of %f) [%"PRId64" / %"PRId32" - %"PRIx32", based on date of %@ vs earliest frame's date %@, which is a difference of %f, then divided by speed of %f to give %f, then multiplied by the time scale of %"PRId32"]...",
+                                         frame.fileIndex,
+                                         imageFiles.count,
+                                         CMTimeGetSeconds(frame.frameTime),
+                                         expectedMovieDuration,
+                                         frame.frameTime.value,
+                                         frame.frameTime.timescale,
+                                         frame.frameTime.flags,
+                                         frame.creationDate,
+                                         earliestFrame,
+                                         [frame.creationDate timeIntervalSinceDate:earliestFrame],
+                                         speed,
+                                         ([frame.creationDate timeIntervalSinceDate:earliestFrame] / speed),
+                                         timeScale);
+
+                                    OSStatus status = VTCompressionSessionEncodeFrame(compressionSession,
+                                                                                      frame.pixelBuffer,
+                                                                                      frame.frameTime,
+                                                                                      kCMTimeInvalid,
+                                                                                      NULL, // TODO: Investigate per-frame properties.
+                                                                                      (void*)frame.frameIndex,
+                                                                                      NULL); // TODO: Check if any of these flags are useful.
+                                    if (0 == status) {
+#if 1
+                                        if (compressionSession) {
+                                            status = VTCompressionSessionCompleteFrames(compressionSession, kCMTimePositiveInfinity);
+
+                                            if (0 != status) {
+                                                LOG_WARNING("Unable to complete compression session, error #%d.", status);
+                                                // TODO: Maybe abort encoding completely?
+                                            }
+                                        }
+#endif
+
+                                        ++framesAddedSuccessfully;
+
+                                        if (!quiet) {
+                                            printf("Processed %s (%lu of %lu)\n", frame.file.path.UTF8String, frame.fileIndex, imageFiles.count);
+                                        }
+                                    } else {
+                                        LOG_ERROR("Unable to compress frame from \"%@\" (%lu of %lu), error #%d.", file.path, fileIndex, imageFiles.count, status);
+                                    }
+
+                                    ++indexOfNextFrameToEncode;
+
+                                    CVPixelBufferRelease(frame.pixelBuffer), frame.pixelBuffer = NULL;
+                                };
+
+                                CreatePixelBufferFromCGImage(image,
+                                                             NSMakeSize(width, height),
+                                                             orientation,
+                                                             concurrencyLimiter,
+                                                             renderGroup,
+                                                             encodingQueue,
+                                                             ^(CVPixelBufferRef pixelBuffer) {
+                                    if (pixelBuffer) {
+                                        RenderedFrame *renderedFrame = [RenderedFrame new];
+                                        renderedFrame.pixelBuffer = pixelBuffer;
+                                        renderedFrame.file = file;
+                                        renderedFrame.fileIndex = fileIndex;
+                                        renderedFrame.frameIndex = frameIndex;
+                                        renderedFrame.frameTime = ((0 < speed)
+                                                                   ? CMTimeMakeWithSeconds([creationDate timeIntervalSinceDate:earliestFrame] / speed, timeScale)
+                                                                   : CMTimeMake(frameIndex * timeValue, timeScale));
+                                        renderedFrame.creationDate = creationDate;
+
+                                        if (frameIndex == indexOfNextFrameToEncode) {
+                                            encodeFrame(renderedFrame);
+
+                                            while ((renderedFrame = framesRenderedOutOfOrder[@(indexOfNextFrameToEncode)])) {
+                                                [framesRenderedOutOfOrder removeObjectForKey:@(indexOfNextFrameToEncode)];
+                                                encodeFrame(renderedFrame);
+                                            }
+                                        } else {
+                                            DLOG(V_FRAME_EVENTS, "Frame %lu rendered out of order (currently up to %lu) - awaiting prior frame(s) before feeding it to the encoder.", frameIndex, indexOfNextFrameToEncode);
+                                            framesRenderedOutOfOrder[@(frameIndex)] = renderedFrame;
+                                        }
+                                    } else {
+                                        LOG_ERROR("Unable to create pixel buffer from \"%@\" (%lu of %lu).", file.path, fileIndex, imageFiles.count);
+                                        exit(1);
+                                    }
+
+                                    CGImageRelease(image);
+                                });
+
+                                ++frameIndex;
                             } else {
                                 LOG_ERROR("Unable to render \"%@\" (%lu of %lu).", file.path, fileIndex, imageFiles.count);
                             }
@@ -1338,21 +1432,26 @@ int main(int argc, char* const argv[]) {
             ++fileIndex;
         }
 
-#if 0
-        if (compressionSession) {
-            const OSStatus status = VTCompressionSessionCompleteFrames(compressionSession, kCMTimePositiveInfinity);
-
-            if (0 != status) {
-                LOG_WARNING("Unable to complete compression session, error #%d.", status);
-                return 1;
-            }
+        if (0 != dispatch_group_wait(renderGroup, DISPATCH_TIME_FOREVER)) {
+            LOG_ERROR("Rendering dispatch group somehow timed out waiting for completion.");
+            return 1;
         }
-#endif
 
         if (movie) {
             dispatch_semaphore_t barrier = dispatch_semaphore_create(0);
 
             dispatch_async(encodingQueue, ^{
+#if 0
+                if (compressionSession) {
+                    const OSStatus status = VTCompressionSessionCompleteFrames(compressionSession, kCMTimePositiveInfinity);
+
+                    if (0 != status) {
+                        LOG_WARNING("Unable to complete compression session, error #%d.", status);
+                        return 1;
+                    }
+                }
+#endif
+
                 [movie finishWritingWithCompletionHandler:^{
                     if (AVAssetWriterStatusCompleted != movie.status) {
                         LOG_ERROR("Unable to complete movie: %@", movie.error.localizedDescription);
