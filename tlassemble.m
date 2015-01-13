@@ -47,7 +47,9 @@ static unsigned long logLevel = 0;
 
 static const unsigned long V_CONFIGURATION = 1;
 static const unsigned long V_CONFIGURATION_OPTIONS = 2;
-static const unsigned long V_FRAME_METADATA = 3;
+static const unsigned long V_FRAME_EVENTS = 3;
+static const unsigned long V_FRAME_METADATA = 4;
+static const unsigned long V_FRAME_SORTING = 5;
 
 #define DLOG(level, fmt, ...) ({ if (level <= logLevel) { NSLog(@"%s:%d " fmt, __FILE__, __LINE__, ## __VA_ARGS__); } })
 
@@ -525,7 +527,15 @@ int main(int argc, char* const argv[]) {
                     LOG_ERROR("Unable to determine the creation date of \"%@\".", b.path);
                     return (reverseOrder ? NSOrderedDescending : NSOrderedAscending);
                 } else {
-                    return (reverseOrder ? [bCreationDate compare:aCreationDate] : [aCreationDate compare:bCreationDate]);
+                    const NSComparisonResult result = (reverseOrder ? [bCreationDate compare:aCreationDate] : [aCreationDate compare:bCreationDate]);
+                    DLOG(V_FRAME_SORTING,
+                         "\"%@\" (%@) %c \"%@\" (%@).",
+                         a,
+                         aCreationDate,
+                         ((NSOrderedSame == result) ? '=' : ((NSOrderedAscending == result) ? '<' : '>')),
+                         b,
+                         bCreationDate);
+                    return result;
                 }
             }
         };
