@@ -510,6 +510,7 @@ int main(int argc, char* const argv[]) {
             {"key-frames-only",             no_argument,        NULL, 12},
             {"max-frame-delay",             required_argument,  NULL, 19},
             {"max-key-frame-period",        required_argument,  NULL, 11},
+            {"non-recursive",               no_argument,        NULL, 24},
             {"quality",                     required_argument,  NULL,  5},
             {"quiet",                       no_argument,        NULL,  6},
             {"rate-limit",                  required_argument,  NULL, 15},
@@ -535,6 +536,7 @@ int main(int argc, char* const argv[]) {
         NSMutableDictionary *filter = [NSMutableDictionary dictionary];
         BOOL dryrun = NO;
         unsigned long long frameLimit = -1;
+        BOOL scanInputFilesRecursively = YES;
         long concurrencyLimit;
         size_t concurrencyLimitSize = sizeof(concurrencyLimit);
 
@@ -895,6 +897,9 @@ int main(int argc, char* const argv[]) {
 
                     break;
                 }
+                case 24: // --non-recursive
+                    scanInputFilesRecursively = NO;
+                    break;
                 default:
                     LOG_ERROR("Invalid arguments (%d).", optionIndex);
                     return EINVAL;
@@ -944,6 +949,7 @@ int main(int argc, char* const argv[]) {
         }
 
         NSMutableArray *filePropertyKeys = [sortFileAttributeKeys[sortAttribute] mutableCopy];
+        [filePropertyKeys addObject:NSURLIsDirectoryKey];
 
         if (0 < speed) {
             if (![filePropertyKeys containsObject:NSURLCreationDateKey]) {
@@ -957,7 +963,7 @@ int main(int argc, char* const argv[]) {
         NSDate *earliestFrame, *latestFrame;
 
         if (!quiet) {
-            printf("Scanning inputs to find input images...\n");
+            printf("Scanning inputs (%srecursively) to find input images...\n", (scanInputFilesRecursively ? "" : "non-"));
         }
 
         dispatch_semaphore_t concurrencyLimiter = dispatch_semaphore_create(concurrencyLimit);
@@ -996,7 +1002,8 @@ int main(int argc, char* const argv[]) {
                     NSDirectoryEnumerator *directoryEnumerator = [fileManager enumeratorAtURL:inputPath
                                                                    includingPropertiesForKeys:filePropertyKeys
                                                                                       options:(   NSDirectoryEnumerationSkipsHiddenFiles
-                                                                                                | NSDirectoryEnumerationSkipsPackageDescendants)
+                                                                                                | NSDirectoryEnumerationSkipsPackageDescendants
+                                                                                                | (scanInputFilesRecursively ? 0 : NSDirectoryEnumerationSkipsSubdirectoryDescendants))
                                                                                  errorHandler:^(NSURL *url, NSError *error) {
                         LOG_ERROR("Error while looking for images in \"%@\": %@", url.path, error.localizedDescription);
                         return YES;
@@ -1008,6 +1015,17 @@ int main(int argc, char* const argv[]) {
                     }
 
                     for (NSURL *file in directoryEnumerator) {
+                        NSNumber *isDirNumber;
+                        NSError *err;
+
+                        if ([file getResourceValue:&isDirNumber forKey:NSURLIsDirectoryKey error:&err]) {
+                            if (isDirNumber.boolValue) {
+                                continue;
+                            }
+                        } else {
+                            LOG_WARNING("Unable to determine if \"%@\" is a directory or not (%@).  Assuming it's not...", file.path, err);
+                        }
+
                         prescanFile(file, speed, &earliestFrame, &latestFrame, fileCreationDates, imageFiles, concurrencyLimiter, prescanGroup, serialisationQueue);
                     }
                 } else {
