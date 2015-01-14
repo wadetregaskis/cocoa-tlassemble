@@ -1142,7 +1142,7 @@ int main(int argc, char* const argv[]) {
                     NSDictionary *imageProperties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(imageSource, 0, (__bridge CFDictionaryRef)imageSourceOptions));
 
                     if (imageProperties) {
-                        DLOG(V_FRAME_METADATA, @"Image properties of \"%s\": %s", file.path.UTF8String, imageProperties.description.UTF8String);
+                        DLOG(V_FRAME_METADATA, @"Image properties of \"%@\": %@", file.path, imageProperties.description);
 
                         BOOL filteredOut = NO;
 
