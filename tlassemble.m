@@ -559,7 +559,7 @@ int main(int argc, char* const argv[]) {
             },
             @"creation": ^(NSURL *a, NSURL *b) {
                 id aCreationDate = fileCreationDates[a], bCreationDate = fileCreationDates[b];
-                NSError *err = nil;
+                NSError *err;
 
                 if (!aCreationDate && ![a getResourceValue:&aCreationDate forKey:NSURLCreationDateKey error:&err]) {
                     LOG_ERROR("Unable to determine the creation date of \"%@\".", a.path);
@@ -1055,7 +1055,7 @@ int main(int argc, char* const argv[]) {
             }
         }
 
-        NSError *err = nil;
+        NSError *err;
         AVAssetWriter *movie = (dryrun ? nil : [AVAssetWriter assetWriterWithURL:destPath fileType:fileType error:&err]);
         AVAssetWriterInput *movieWriter;
         const int32_t timeScale = INT32_MAX;
