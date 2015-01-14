@@ -265,10 +265,10 @@ static void compressedFrameOutput(void *rawContext,
                     printf("Completed frame #%"PRIuPTR".\n", (uintptr_t)frameNumber);
                 }
             } else {
-                LOG_ERROR("Unable to append compressed frame #%"PRIuPTR" to file, status = %s (%s).",
+                LOG_ERROR("Unable to append compressed frame #%"PRIuPTR" to file, status = %s (%@).",
                           (uintptr_t)frameNumber,
                           NameOfAVAssetWriterStatus(context.assetWriter.status),
-                          context.assetWriter.error.description.UTF8String);
+                          context.assetWriter.error.description);
                 exit(1);
             }
         }
