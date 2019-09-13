@@ -629,7 +629,7 @@ int main(int argc, char* const argv[]) {
 
                     break;
                 }
-                case '2': {
+                case 2: {
                     char *end = NULL;
                     fps = strtod(optarg, &end);
 
